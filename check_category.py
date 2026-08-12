@@ -1,10 +1,10 @@
 from playwright.sync_api import sync_playwright
 import json
 import os
-CATEGORY_URL = "https://www.centrecom.com.au/audio-speakers"
 BASE_URL = "https://www.centrecom.com.au"
 CC_FILE = "cc_numbers.txt"
 PROGRESS_FILE = "progress.json"
+FAIL_FILE = "failed_products.txt"
 
 def is_in_stock_adelaide(page):
     adelaide = page.locator(
@@ -47,7 +47,9 @@ def get_retail_product_urls(page, category_url):
     print(f"Category has {total_pages} pages")
 
     for page_number in range(1, total_pages + 1):
-        url = f"{category_url}?pagenumber={page_number}"
+        separator = "&" if "?" in category_url else "?"
+        url = f"{category_url}{separator}pagenumber={page_number}"
+        print(url)
 
         print(f"Reading page {page_number}/{total_pages}")
 
@@ -81,66 +83,117 @@ def save_cc_number(cc_number, filename="cc_numbers.txt"):
     with open(filename, "a") as file:
         file.write(cc_number + "\n")
 
-def start_new_run():
+def start_new_run(category_url):
     open(CC_FILE, "w").close()
+    open(FAIL_FILE, "w").close()
+
+    save_progress(category_url, 0, 0)
+
+def save_progress(category_url, next_index, cc_count, completed=False):
+    data = {
+        "category_url": category_url,
+        "next_index": next_index,
+        "cc_count": cc_count,
+        "completed": completed
+    }
 
     with open(PROGRESS_FILE, "w") as file:
-        json.dump({"next_index": 0}, file)
-
-def save_progress(next_index):
-    with open(PROGRESS_FILE, "w") as file:
-        json.dump({"next_index": next_index}, file)
+        json.dump(data, file)
 
 def load_progress():
     if not os.path.exists(PROGRESS_FILE):
-        return 0
+        return None
 
     with open(PROGRESS_FILE, "r") as file:
         data = json.load(file)
 
-    return data["next_index"]
+    return data
 
+def get_cc_file_count():
+    if not os.path.exists(CC_FILE):
+        return 0
+
+    with open(CC_FILE, "r") as file:
+        return sum(1 for line in file if line.strip())
+    
+def check_product(page, product_url, retries=2):
+    for attempt in range(retries + 1):
+        try:
+            page.goto(product_url, timeout=30000)
+
+            if is_in_stock_adelaide(page):
+                return get_cc_number(page)
+
+            return None
+
+        except Exception as e:
+            if attempt == retries:
+                with open(FAIL_FILE, "a") as file:
+                    file.write(get_cc_number(page) + "\n")
+
+                print(f"Failed permanently: {product_url}")
+                return None
+
+            print(f"Retrying {product_url}...")
 def main():
-
+    category_url = input("Enter Centre Com category URL: ").strip()
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         page = browser.new_page()
 
-        product_urls = get_retail_product_urls(page, CATEGORY_URL)
+        product_urls = get_retail_product_urls(page, category_url)
 
         print(f"\nProducts found: {len(product_urls)}")
 
         cc_numbers = []
 
-        start_index = load_progress()
+        progress = load_progress()
 
-        if start_index == 0:
-            start_new_run()
+        if progress is None:
+            start_new_run(category_url)
             start_index = 0
+            cc_count = 0
+
+        elif progress["category_url"] != category_url:
+            print("Different category detected. Starting new run.")
+            start_new_run(category_url)
+            start_index = 0
+            cc_count = 0
+
+        elif get_cc_file_count() != progress["cc_count"]:
+            print("CC file does not match saved progress. Starting new run.")
+            start_new_run(category_url)
+            start_index = 0
+            cc_count = 0
+
+        elif progress["completed"]:
+            print("Previous run completed. Starting a fresh scan.")
+            start_new_run(category_url)
+            start_index = 0
+            cc_count = 0
+
+        else:
+            start_index = progress["next_index"]
+            cc_count = progress["cc_count"]
+
+            print(f"Resuming from product {start_index}")
 
         for i, product_url in enumerate(product_urls[start_index:], start=start_index):
             full_url = BASE_URL + product_url
 
             print(f"Checking {i + 1}/{len(product_urls)}")
 
-            try:
-                page.goto(full_url)
+            cc_number = check_product(page, full_url)
 
-                if is_in_stock_adelaide(page):
-                    cc_number = get_cc_number(page)
-                    
-                    cc_numbers.append(cc_number)
-                    save_cc_number(cc_number)
-                    save_progress(i + 1)
+            if cc_number:
+                print(f"    In Stock -> CC:{cc_number}")
+                save_cc_number(cc_number)
+                cc_count+=1
+            else:
+                print("Not In Stock -> Skipping")
+            save_progress(category_url, i+1, cc_count)
 
-                    print(f"  In Stock -> CC#: {cc_number}")
-                else:
-                    print("  Not in stock -> skipping")
-
-            except Exception as e:
-                print(f"  ERROR -> {full_url}")
-                print(f"  {e}")
-
+        save_progress(category_url, len(product_urls), cc_count, completed=True)
         print("\nFinal CC list:")
 
         for cc_number in cc_numbers:
