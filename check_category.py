@@ -1,7 +1,10 @@
 from playwright.sync_api import sync_playwright
-
+import json
+import os
 CATEGORY_URL = "https://www.centrecom.com.au/audio-speakers"
 BASE_URL = "https://www.centrecom.com.au"
+CC_FILE = "cc_numbers.txt"
+PROGRESS_FILE = "progress.json"
 
 def is_in_stock_adelaide(page):
     adelaide = page.locator(
@@ -34,7 +37,7 @@ def get_total_pages(page):
     return total_pages
 
 
-def get_product_urls(page, category_url):
+def get_retail_product_urls(page, category_url):
     product_urls = []
 
     page.goto(category_url)
@@ -74,21 +77,48 @@ def get_product_urls(page, category_url):
 
     return product_urls
 
+def save_cc_number(cc_number, filename="cc_numbers.txt"):
+    with open(filename, "a") as file:
+        file.write(cc_number + "\n")
 
+def start_new_run():
+    open(CC_FILE, "w").close()
 
+    with open(PROGRESS_FILE, "w") as file:
+        json.dump({"next_index": 0}, file)
+
+def save_progress(next_index):
+    with open(PROGRESS_FILE, "w") as file:
+        json.dump({"next_index": next_index}, file)
+
+def load_progress():
+    if not os.path.exists(PROGRESS_FILE):
+        return 0
+
+    with open(PROGRESS_FILE, "r") as file:
+        data = json.load(file)
+
+    return data["next_index"]
 
 def main():
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         page = browser.new_page()
 
-        product_urls = get_product_urls(page, CATEGORY_URL)
+        product_urls = get_retail_product_urls(page, CATEGORY_URL)
 
         print(f"\nProducts found: {len(product_urls)}")
 
         cc_numbers = []
 
-        for i, product_url in enumerate(product_urls):
+        start_index = load_progress()
+
+        if start_index == 0:
+            start_new_run()
+            start_index = 0
+
+        for i, product_url in enumerate(product_urls[start_index:], start=start_index):
             full_url = BASE_URL + product_url
 
             print(f"Checking {i + 1}/{len(product_urls)}")
@@ -98,7 +128,10 @@ def main():
 
                 if is_in_stock_adelaide(page):
                     cc_number = get_cc_number(page)
+                    
                     cc_numbers.append(cc_number)
+                    save_cc_number(cc_number)
+                    save_progress(i + 1)
 
                     print(f"  In Stock -> CC#: {cc_number}")
                 else:
@@ -112,10 +145,7 @@ def main():
 
         for cc_number in cc_numbers:
             print(cc_number)
-
-        with open("cc_numbers.txt", "w") as file:
-            for cc_number in cc_numbers:
-                file.write(cc_number + "\n")
+        
         input("\nPress Enter to close...")
         browser.close()
 
