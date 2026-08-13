@@ -1,23 +1,14 @@
-from playwright.sync_api import sync_playwright
+import tkinter as tk
 
-from scraper import scrape_category
-from validation import handle_input
+from gui import TicketApp
 
-def progress_update(event, data):
-    print("EVENT:", event, data)
-    
+
 def main():
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
-        page = browser.new_page()
+    root = tk.Tk()
 
-        try:
-            category_url = handle_input(page)
-            products = scrape_category(page, category_url, progress_update)
+    app = TicketApp(root)
 
-            #print(f"Run complete: {len(products)} CC numbers saved.")
-        finally:
-            browser.close()
+    root.mainloop()
 
 
 if __name__ == "__main__":

@@ -13,14 +13,15 @@ def start_new_run(category_url):
     open(CC_FILE, "w", encoding="utf-8").close()
     open(FAIL_FILE, "w", encoding="utf-8").close()
 
-    save_progress(category_url, 0, 0)
+    save_progress(category_url, 0, 0, 0)
 
 
-def save_progress(category_url, next_index, cc_count, completed=False):
+def save_progress(category_url, next_index, cc_count, fail_count, completed=False):
     data = {
         "category_url": category_url,
         "next_index": next_index,
         "cc_count": cc_count,
+        "fail_count": fail_count,
         "completed": completed,
     }
 

@@ -54,7 +54,7 @@ def build_page_url(category_url, page_number):
     return f"{category_url}{separator}pagenumber={page_number}"
 
 
-def get_retail_product_urls(page, category_url, on_progress=None):
+def get_retail_product_urls(page, category_url, on_progress=None, stop_event=None):
     product_urls = []
 
     page.goto(category_url, wait_until="domcontentloaded", timeout=30000)
@@ -63,6 +63,9 @@ def get_retail_product_urls(page, category_url, on_progress=None):
     print(f"Category has {total_pages} pages")
     skipped_products = 0   
     for page_number in range(1, total_pages + 1):
+        if stop_event and stop_event.is_set():
+            print("Scrape stopped by user.")
+            return load_cc_numbers()
         url = build_page_url(category_url, page_number)
 
         print(url)
@@ -108,15 +111,15 @@ def get_retail_product_urls(page, category_url, on_progress=None):
     return list(dict.fromkeys(product_urls)), skipped_products
 
 
-def check_product(page, product_url, retries=2):
+def check_product(page, product_url, retries=2, on_progress=None):
     for attempt in range(retries + 1):
         try:
             page.goto(product_url, wait_until="domcontentloaded", timeout=30000)
 
             if is_in_stock_adelaide(page):
-                return get_cc_number(page)
+                return get_cc_number(page), False
 
-            return None
+            return None, False
 
         except Exception as error:
             if attempt == retries:
@@ -124,16 +127,16 @@ def check_product(page, product_url, retries=2):
                 # so record the URL that failed instead.
                 with open(FAIL_FILE, "a", encoding="utf-8") as file:
                     file.write(product_url + "\n")
-
+    
                 print(f"Failed permanently: {product_url}")
                 print(f"Reason: {error}")
-                return None
+                return None, True
 
             print(f"Retrying {product_url}...")
 
 
-def scrape_category(page, category_url, on_progress=None):
-    product_urls, skipped_products = get_retail_product_urls(page, category_url, on_progress)
+def scrape_category(page, category_url, on_progress=None, stop_event=None):
+    product_urls, skipped_products = get_retail_product_urls(page, category_url, on_progress, stop_event)
     print(f"TOTAL PRODUCTS SCANNED: {skipped_products+len(product_urls)}")
     print(f"Found {len(product_urls)} retail-available products")
     print(f"Skipped {skipped_products} products due to grey icon")
@@ -141,17 +144,19 @@ def scrape_category(page, category_url, on_progress=None):
 
     progress = load_progress()
 
-    # Resume only if an unfinished run exists for this exact category URL.
     if (
         progress is None
         or progress.get("category_url") != category_url
-        or progress.get("completed", False)
     ):
         start_new_run(category_url)
         progress = load_progress()
 
+    elif progress.get("completed", False):
+        return
+    
     next_index = progress.get("next_index", 0)
     cc_count = progress.get("cc_count", 0)
+    fail_count = progress.get("fail_count", 0)
 
     # The CC file should contain exactly as many numbers as progress.json says
     # have been successfully saved. If not, the run is no longer trustworthy.
@@ -173,6 +178,9 @@ def scrape_category(page, category_url, on_progress=None):
         print(f"Resuming at product {next_index + 1}/{len(product_urls)}")
 
     for index in range(next_index, len(product_urls)):
+        if stop_event and stop_event.is_set():
+            print("Scrape stopped by user.")
+            return load_cc_numbers()
         # Catch external edits or a previous partial write before continuing.
         if get_cc_file_count() != cc_count:
             print("Progress mismatch detected during run. Restarting category.")
@@ -188,8 +196,15 @@ def scrape_category(page, category_url, on_progress=None):
             total=len(product_urls),
             cc_count=cc_count
         )
-        cc_number = check_product(page, product_url)
+        cc_number, failed = check_product(page, product_url, on_progress=on_progress)
+        if failed:
+            fail_count += 1
 
+            report_progress(
+                on_progress,
+                "failed",
+                fail_count=fail_count
+            )
         if cc_number is not None:
             save_cc_number(cc_number)
             cc_count += 1
@@ -205,6 +220,7 @@ def scrape_category(page, category_url, on_progress=None):
             category_url,
             next_index=index + 1,
             cc_count=cc_count,
+            fail_count=fail_count,
             completed=False,
         )
 
@@ -212,6 +228,7 @@ def scrape_category(page, category_url, on_progress=None):
         category_url,
         next_index=len(product_urls),
         cc_count=cc_count,
+        fail_count=fail_count,
         completed=True,
     )
     report_progress(
