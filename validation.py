@@ -41,7 +41,10 @@ def validate_category_url(page, category_url):
     except Exception:
         return None, "Could not load page"
 
-    if page.locator(".product-grid").count() == 0:
+    if (
+        page.locator(".product-grid").count() == 0
+        and page.locator("#deal-products-wrap").count() == 0
+    ):
         return None, "URL is not a category page"
 
     return category_url, None
