@@ -1,6 +1,7 @@
 from playwright.sync_api import sync_playwright
 import json
 import os
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 BASE_URL = "https://www.centrecom.com.au"
 CC_FILE = "cc_numbers.txt"
 PROGRESS_FILE = "progress.json"
@@ -135,12 +136,66 @@ def check_product(page, product_url, retries=2):
                 return None
 
             print(f"Retrying {product_url}...")
+
+
+
+def normalise_url(url):
+    parsed_url = urlparse(url)
+
+    params = parse_qs(parsed_url.query)
+    params.pop("pagenumber", None)
+
+    new_query = urlencode(params, doseq=True)
+
+    return urlunparse(
+        parsed_url._replace(
+            query=new_query,
+            fragment=""
+        )
+    )
+
+
+def handle_input(page):
+    while True:
+        category_url = input("Enter Centre Com category URL: ").strip()
+
+        parsed_url = urlparse(category_url)
+
+        if parsed_url.scheme not in ("http", "https"):
+            print("Invalid URL")
+            continue
+
+        if parsed_url.hostname not in ("centrecom.com.au", "www.centrecom.com.au"):
+            print("URL must be from Centre Com")
+            continue
+
+        category_url = normalise_url(category_url)
+
+        try:
+            page.goto(category_url, wait_until="domcontentloaded")
+        except Exception:
+            print("Could not load page")
+            continue
+
+        final_url = urlparse(page.url)
+
+        if final_url.hostname not in ("centrecom.com.au", "www.centrecom.com.au"):
+            print("Page redirected away from Centre Com")
+            continue
+
+        if page.locator(".product-grid").count() == 0:
+            print("URL is not a category page")
+            continue
+
+        return category_url
+
+
 def main():
-    category_url = input("Enter Centre Com category URL: ").strip()
+    
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         page = browser.new_page()
-
+        category_url = handle_input(page)
         product_urls = get_retail_product_urls(page, category_url)
 
         print(f"\nProducts found: {len(product_urls)}")
