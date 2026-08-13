@@ -9,16 +9,17 @@ def save_cc_number(cc_number, filename=CC_FILE):
         file.write(cc_number + "\n")
 
 
-def start_new_run(category_url):
+def start_new_run(category_url, sale_filter):
     open(CC_FILE, "w", encoding="utf-8").close()
     open(FAIL_FILE, "w", encoding="utf-8").close()
 
-    save_progress(category_url, 0, 0, 0)
+    save_progress(category_url, sale_filter, 0, 0, 0)
 
 
-def save_progress(category_url, next_index, cc_count, fail_count, completed=False):
+def save_progress(category_url, sale_filter, next_index, cc_count, fail_count, completed=False):
     data = {
         "category_url": category_url,
+        "sale_filter": sale_filter,
         "next_index": next_index,
         "cc_count": cc_count,
         "fail_count": fail_count,

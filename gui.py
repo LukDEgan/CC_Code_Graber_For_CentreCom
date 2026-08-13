@@ -22,7 +22,22 @@ class TicketApp:
 
         self.url_entry = ttk.Entry(root, width=70)
         self.url_entry.pack(padx=20)
-        
+        # Ticket type filter
+        ttk.Label(root, text="Ticket Type").pack(pady=(10, 5))
+
+        self.sale_filter = ttk.Combobox(
+            root,
+            values=[
+                "All items",
+                "On sale",
+                "Not on sale"
+            ],
+            state="readonly",
+            width=20
+        )
+
+        self.sale_filter.set("All items")
+        self.sale_filter.pack()
         # Start button
         self.start_button = ttk.Button(
             root,
@@ -98,27 +113,23 @@ class TicketApp:
 
     def start_scrape(self):
         self.stop_event.clear()
-        self.root.after(
-            0,
-            self.start_button.config,
-            {"state": "disabled"}
-        )
-        self.root.after(
-            0,
-            self.stop_button.config,
-            {"state": "normal"}
-        )
+        sale_filter = self.sale_filter.get()
+        
 
         category_url = self.url_entry.get().strip()
         category_url = normalise_url(category_url)
 
         progress = load_progress()
-        if progress is None or progress.get("category_url") != category_url:
+        if (
+            progress is None 
+            or progress.get("category_url") != category_url
+            or progress.get("sale_filter") != sale_filter):
             self.reset_display()
 
         if (
             progress
             and progress.get("category_url") == category_url
+            and progress.get("sale_filter") == sale_filter
             and not progress.get("completed", False)
         ):
             self.set_status("Resuming previous run...")
@@ -138,6 +149,7 @@ class TicketApp:
         if (
             progress
             and progress.get("category_url") == category_url
+            and progress.get("sale_filter") == sale_filter
             and progress.get("completed", False)
         ):
             run_again = messagebox.askyesno(
@@ -150,17 +162,26 @@ class TicketApp:
                 self.set_status("Cancelled")
                 return
 
-            start_new_run(category_url)
-
+            start_new_run(category_url, sale_filter)
+        self.root.after(
+            0,
+            self.start_button.config,
+            {"state": "disabled"}
+        )
+        self.root.after(
+            0,
+            self.stop_button.config,
+            {"state": "normal"}
+        )
         thread = threading.Thread(
             target=self.run_scraper,
-            args=(category_url,),
+            args=(category_url, sale_filter),
             daemon=True
         )
 
         thread.start()
 
-    def run_scraper(self, category_url):
+    def run_scraper(self, category_url, sale_filter):
         self.root.after(
         0,
         self.start_button.config,
@@ -195,6 +216,7 @@ class TicketApp:
                 scrape_category(
                     page,
                     category_url,
+                    sale_filter,
                     on_progress=self.handle_progress,
                     stop_event=self.stop_event
                 )
