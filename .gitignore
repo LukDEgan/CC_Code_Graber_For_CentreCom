@@ -1,5 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
-*.txt
+cc_numbers.txt
+failed_products.txt
 progress.json
