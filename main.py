@@ -6,7 +6,7 @@ from gui import TicketApp
 def main():
     root = tk.Tk()
 
-    app = TicketApp(root)
+    TicketApp(root)
 
     root.mainloop()
 

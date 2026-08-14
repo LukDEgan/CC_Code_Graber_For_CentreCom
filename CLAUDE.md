@@ -1,0 +1,168 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project purpose
+
+A desktop tool that scrapes Centre Com (centrecom.com.au, an Australian computer hardware
+retailer) for a given category URL and sale-status filter (all / on sale / not on sale). It
+finds products in stock at the **Adelaide retail store** and writes their CC product codes to
+`output/sale_cc_numbers.txt` / `output/not_sale_cc_numbers.txt`, for price-ticketing purposes.
+When the filter is "All items" it still scans everything but splits results into the sale vs.
+not-sale files. The actual end-to-end workflow: run a scrape, then copy the codes (via the GUI's
+Copy buttons) into a separate internal ticket-generation website — the GUI is not the last step.
+
+## Tech stack
+
+- Python 3.12, no packaging (flat scripts, no pyproject.toml/setup.py).
+- GUI: `tkinter`/`ttk`, themed with **sv-ttk** (Sun Valley — native-looking Windows 11 Fluent
+  style, light/dark). `sv_ttk.set_theme(...)` must be called before building widgets; named fonts
+  like `"SunValleyBodyStrongFont"`/`"SunValleyTitleFont"`/`"SunValleyCaptionFont"` come from the
+  theme, not tkinter itself.
+- Scraping: **Playwright** sync API driving a real, non-headless Chromium window (`headless=False`)
+  — requires a display, won't run headless/CI as-is. No requests/BeautifulSoup/selenium.
+- No external services, API keys, or `.env` — it's an unauthenticated public-site scraper.
+- Connectivity: `connectivity.py`'s `is_online()` does a raw TCP check (stdlib `socket`) against
+  Centre Com, not a real HTTP request — cheap, no Playwright/browser needed. The GUI polls it
+  every `config.CONNECTION_POLL_INTERVAL_MS` (10s) in a background thread for the always-visible
+  status indicator, in addition to checking fresh on every Start press.
+
+## Running it
+
+```
+python main.py
+```
+
+`requirements.txt` only pins Playwright's own transitive deps (from a `pip freeze`), not the
+browser binaries. After `pip install -r requirements.txt`, Playwright also needs
+`playwright install chromium` — not documented anywhere else in the repo.
+
+## Key files
+
+- `main.py` — GUI entry point (`TicketApp` from `gui.py`).
+- `gui.py` — tkinter GUI. Validates the category URL, runs the scrape in a background thread
+  (`self.scrape_thread`) with a `threading.Event` for cooperative stop/cancel, and prompts to
+  resume or restart an incomplete run. `root.protocol("WM_DELETE_WINDOW", self.on_close)` sets
+  `stop_event` and joins the scrape thread with a bounded timeout on window close, so Playwright's
+  browser/driver get a chance to clean up on the thread that actually owns them (Playwright's sync
+  API is thread-affine) before the window is destroyed. Three independent connectivity-check paths
+  (manual retry, Start-press check, background poll) share a monotonic
+  `self._connection_check_generation` counter — each check's completion callback only updates the
+  indicator if it's still the most recent check, so a slow/stale check can't overwrite a fresher
+  result. All background-thread-originated widget updates go through `self._safe_after(...)`
+  (not `root.after` directly) — it's a no-op once `self._closed` is set by `on_close`, since
+  calling `root.after` from another thread on an already-destroyed root can hard-crash Tcl rather
+  than raise a catchable Python exception.
+- **Start/Resume/Restart/Stop button state.** There are three action buttons: `start_button`
+  (label toggles "Start"/"Resume"), `restart_button` (only enabled when the current URL/filter
+  exactly match a saved, *incomplete* run — clicking it calls `start_new_run` then `start_scrape`),
+  and `stop_button`. `_refresh_start_controls()` is the single source of truth for this state —
+  it re-derives "Start" vs "Resume" and Restart's enabled state from `load_progress()` against the
+  live `url_entry`/`sale_filter` values, bound to `<KeyRelease>`/`<<ComboboxSelected>>` so it stays
+  live as the user types, and also called from `run_scraper`'s `finally` block (covers normal
+  completion, Stop, `BrowserClosedError`, and any other exception uniformly) and once at startup.
+  It early-returns (forcing Restart disabled) whenever `stop_button` is currently `"normal"` —
+  i.e. a scrape is actively running — specifically so editing the fields mid-scrape can't enable
+  Restart and race `start_new_run`'s file truncation against the background thread's own writes.
+  `run_scraper` also distinguishes a genuinely stopped run from a completed one before setting the
+  status text: after `scrape_category` returns, if `stop_event` is set *and* `progress.json` isn't
+  `completed`, status becomes `"Stopped"` (not left on `"Stopping..."`); if it did complete in that
+  same window, the `"complete"`-event status is left alone.
+- **The "Output" section (summary label + Copy buttons) only reflects confirmed, validated scans.**
+  `_begin_scrape` no longer touches it eagerly on a category/filter mismatch — `clear_opposite_file`,
+  `reset_display`, and `_set_output_summary` all moved into `run_scraper`, right after
+  `validate_category_url` succeeds. Typing an invalid/rejected URL and clicking Start now leaves
+  the summary and Copy buttons showing the last real, valid scan untouched instead of jumping to
+  the not-yet-validated input. Keep this ordering if you touch `_begin_scrape`/`run_scraper` again —
+  it's easy to reintroduce eager updates that leak an unvalidated URL into the UI.
+- `scraper.py` — core scraping logic: paginate the category, filter by sale status, check
+  Adelaide retail stock, extract CC codes. `check_product` resolves and returns each product's
+  final sale status ("sale"/"not_sale") so the caller knows which output file to write to. Has
+  crash-resume logic that cross-checks `progress.json` against the combined line count of both
+  CC output files and restarts the category if they disagree (implemented as a recursive call to
+  `scrape_category`, not a loop).
+- `progress.py` — persistence helpers. `save_cc_number(cc_number, sale_status)` writes to
+  `output/sale_cc_numbers.txt` or `output/not_sale_cc_numbers.txt` depending on status;
+  `get_cc_file_count`/`load_cc_numbers` read from both combined; `count_lines(filename)` is the
+  public per-file line counter the GUI uses for the sale/not-sale split. `start_new_run`
+  truncates all three output files (sale, not-sale, failed) plus `progress.json`. `clear_opposite_file(sale_filter)`
+  empties just the file for the excluded status (e.g. clears not-sale when filtering to "On sale")
+  — `gui.py`'s `run_scraper` calls this right after the new category/filter combo's URL is
+  successfully validated (not before — see the `gui.py` entry above), so a stale file from an
+  unrelated previous run never sits there with a live Copy button, but an invalid URL attempt
+  also never touches it. `save_progress` writes atomically (temp
+  file + `os.replace`) and `load_progress` validates the parsed JSON is a dict with all expected
+  keys — both guard against a crash mid-write or a hand-edited file silently corrupting state.
+- `scraper.py`'s `BrowserClosedError` — raised (via the shared `goto` helper, used by both
+  `scraper.py` and `validation.py`, and directly in `check_product`) whenever a Playwright call
+  fails in a way that indicates the browser is gone: `page.is_closed()` is true (clean window
+  close), OR the error is a `playwright.sync_api.Error` whose message mentions "closed" (an
+  unclean crash/kill, where `is_closed()` never gets set — see `is_browser_closed_error`). This is
+  deliberately NOT treated like a normal per-product failure (which retries and logs to
+  `failed_products.txt`) — it propagates all the way up through `scrape_category` uncaught, so the
+  loop stops immediately at the real point of interruption instead of blazing through every
+  remaining product as an instant "failure" and reporting a false `"complete"`. `gui.py`'s
+  `run_scraper` catches it specifically (before the generic `except Exception`) to show a clear
+  "browser was closed" status instead of either a false-complete progress bar or a raw error
+  string. `scrape_category` also checks `stop_event` immediately after `get_retail_product_urls`
+  returns (which itself only checks `stop_event` between pages) — clicking Stop while it's still
+  paging returns a truncated list, and without this check the very next validity test would treat
+  that as "the category shrank" and wipe all existing output/progress via `start_new_run`.
+- `validation.py` — URL normalization and category-page validation (Centre Com domains only).
+  Shares `scraper.goto`/`is_browser_closed_error` so a browser closed during validation produces
+  the same `BrowserClosedError` as everywhere else, not a generic error.
+- `config.py` — constants (`BASE_URL`, `OUTPUT_DIR`, output file paths).
+- `file_actions.py` — the only OS-specific code in the repo. `open_path(path)` opens a file/folder
+  in the OS's default handler: `os.startfile` on Windows, `open` on macOS, `xdg-open` on plain
+  Linux, and — since `sys.platform` reports `"linux"` under WSL too — a dedicated WSL branch
+  (`_is_wsl()` checks `/proc/version` for "microsoft") that converts the path with `wslpath -w`
+  and opens it via `explorer.exe`. `explorer.exe` is called with `check=False` deliberately: it's
+  a known Windows quirk that it often exits non-zero even after successfully opening the folder.
+  Every subprocess call has `timeout=OPEN_TIMEOUT` (10s) so a stalled file-manager process can't
+  hang the caller forever. Used only by the GUI's "Open Output Folder" button (run in a background
+  thread — this is the one blocking OS call in the app that isn't Playwright) — the Copy-to-clipboard
+  buttons use tkinter's built-in clipboard (`root.clipboard_clear`/`clipboard_append`), no OS
+  branching needed.
+
+## Tests
+
+`tests/` — pytest suite covering `progress.py`, `scraper.py`, `validation.py`, `connectivity.py`,
+`file_actions.py`, and `gui.py`. Run with `pytest` (or `.venv/bin/python -m pytest`) from the repo
+root. GUI tests need a real display; `tests/conftest.py`'s `requires_tk` skip-guard makes them
+skip cleanly (not fail) when none is available, so plain `pytest` always works — use
+`xvfb-run -a pytest` to actually exercise them without a real display.
+
+Two things to know before writing more tests here:
+- **`from config import X` bindings are independent per module.** `progress.py`, `scraper.py`,
+  and `gui.py` each do their own `from config import SALE_FILE, ...` — patching `config.SALE_FILE`
+  in a test does **not** affect `progress.SALE_FILE`/`gui.SALE_FILE`, since each import created its
+  own binding. Monkeypatch the constant on every *consuming* module that's actually exercised by
+  the test (see the `paths`/`app_paths` fixtures in `tests/test_progress.py`/`tests/test_gui.py`
+  for the pattern), not on `config` itself.
+- **`tests/conftest.py`'s `run_in_mainloop(root, steps)`** formalizes the pattern used throughout
+  this project's development for verifying tkinter behavior: a list of `(delay_ms, fn)` steps
+  chained via `root.after`, run against a real `mainloop()`, with the window destroyed
+  automatically after the last step. Prefer it over inventing a new driving mechanism per test.
+- **`tests/test_gui.py`'s `app_paths` fixture patches `threading.Thread` to `SyncThread`**, which
+  runs its target synchronously instead of on a real OS thread. This isn't just a speed
+  optimization: real threads combined with rapid `tk.Tk()` creation/destruction across many tests
+  in one process reproducibly triggers a `Fatal Python error: Aborted` crash in Tcl/Tk — confirmed
+  unrelated to this app's own code (it reproduced with `test_progress.py`, which never touches
+  `gui`/`scraper`/Playwright, running before `test_gui.py`). GUI tests exercise what each worker
+  function *does*, not real concurrency, so synchronous execution is safe and sidesteps the crash
+  entirely. Any new GUI test that spawns a `threading.Thread` (directly or via an app method) gets
+  this automatically through `app_paths` — don't remove it without re-verifying the crash is gone
+  (`for i in {1..10}; do pytest -q; done` should stay green every time).
+
+## Gotchas
+
+- Product/stock detection relies on **positional DOM selectors** reverse-engineered from the
+  live site (e.g. the 2nd `.product-code .value` element, the 2nd stock-availability icon).
+  These will silently break if Centre Com changes their page markup — verify against the real
+  site, not just code review, when touching `scraper.py`.
+- Two category layouts are handled differently: normal category pages (`div.prbox_box`,
+  `.product-grid`) vs "deal" pages (`div.deal-grid-box`, `#deal-products-wrap`), the latter
+  always treated as single-page and always on-sale.
+- `output/` (sale/not-sale/failed files) and `progress.json` are run-time output/state, gitignored
+  and untracked — don't commit fresh scrape output as if it were source changes.
+- Commits go directly to `main` (solo project, no branches/PRs).
