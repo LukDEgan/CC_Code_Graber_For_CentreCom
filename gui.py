@@ -9,7 +9,14 @@ from playwright.sync_api import sync_playwright
 from config import CONNECTION_POLL_INTERVAL_MS, NOT_SALE_FILE, OUTPUT_DIR, SALE_FILE
 from connectivity import is_online
 from file_actions import open_path
-from progress import clear_opposite_file, count_lines, load_progress, start_new_run
+from progress import (
+    clear_opposite_file,
+    count_lines,
+    is_completed,
+    load_progress,
+    progress_matches,
+    start_new_run,
+)
 from scraper import BrowserClosedError, NetworkDisconnectedError, scrape_category
 from validation import normalise_url, validate_category_url
 
@@ -294,7 +301,7 @@ class TicketApp:
 
         sale_count = count_lines(SALE_FILE)
         not_sale_count = count_lines(NOT_SALE_FILE)
-        completed = bool(progress and progress.get("completed", False))
+        completed = is_completed(progress)
 
         # An incomplete run with no output yet (e.g. a freshly truncated
         # progress.json) has nothing to show or copy -- treat it the same as
@@ -431,11 +438,9 @@ class TicketApp:
         sale_filter = self.sale_filter.get()
 
         progress = load_progress()
-        is_resumable = bool(
-            progress
-            and progress.get("category_url") == category_url
-            and progress.get("sale_filter") == sale_filter
-            and not progress.get("completed", False)
+        is_resumable = (
+            progress_matches(progress, category_url, sale_filter)
+            and not is_completed(progress)
         )
 
         self.start_button.config(text="Resume" if is_resumable else "Start")
@@ -488,12 +493,7 @@ class TicketApp:
 
         progress = load_progress()
 
-        if (
-            progress
-            and progress.get("category_url") == category_url
-            and progress.get("sale_filter") == sale_filter
-            and not progress.get("completed", False)
-        ):
+        if progress_matches(progress, category_url, sale_filter) and not is_completed(progress):
             self.set_status("Resuming previous run...")
 
             self.product_value.config(
@@ -511,12 +511,7 @@ class TicketApp:
             self._refresh_output_buttons()
             self._set_output_summary(category_url, sale_filter)
 
-        if (
-            progress
-            and progress.get("category_url") == category_url
-            and progress.get("sale_filter") == sale_filter
-            and progress.get("completed", False)
-        ):
+        if progress_matches(progress, category_url, sale_filter) and is_completed(progress):
             run_again = messagebox.askyesno(
                 "Category already completed",
                 "This category has already been completed.\n\n"
@@ -587,11 +582,7 @@ class TicketApp:
                     return
 
                 progress = load_progress()
-                if (
-                    progress is None
-                    or progress.get("category_url") != category_url
-                    or progress.get("sale_filter") != sale_filter
-                ):
+                if not progress_matches(progress, category_url, sale_filter):
                     clear_opposite_file(sale_filter)
                     self._safe_after(0, self.reset_display)
                     self._safe_after(0, self._set_output_summary, category_url, sale_filter)
@@ -606,7 +597,7 @@ class TicketApp:
 
                 if self.stop_event.is_set():
                     finished_progress = load_progress()
-                    if not (finished_progress and finished_progress.get("completed", False)):
+                    if not is_completed(finished_progress):
                         self._safe_after(0, self.set_status, "Stopped")
 
                 browser.close()

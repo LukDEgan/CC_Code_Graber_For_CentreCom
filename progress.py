@@ -77,6 +77,18 @@ def load_progress():
     return data
 
 
+def progress_matches(progress, category_url, sale_filter):
+    return bool(
+        progress
+        and progress.get("category_url") == category_url
+        and progress.get("sale_filter") == sale_filter
+    )
+
+
+def is_completed(progress):
+    return bool(progress and progress.get("completed", False))
+
+
 def count_lines(filename):
     if not os.path.exists(filename):
         return 0

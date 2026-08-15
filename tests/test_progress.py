@@ -167,3 +167,43 @@ def test_save_cc_number_appends_to_correct_file_by_status(paths):
 
     assert paths["sale_file"].read_text(encoding="utf-8") == "111111\n333333\n"
     assert paths["not_sale_file"].read_text(encoding="utf-8") == "222222\n"
+
+
+def test_progress_matches_none_progress_returns_false():
+    assert progress.progress_matches(None, "https://x.com/cat", "All items") is False
+
+
+def test_progress_matches_mismatched_category_url_returns_false():
+    p = {"category_url": "https://x.com/other", "sale_filter": "All items"}
+    assert progress.progress_matches(p, "https://x.com/cat", "All items") is False
+
+
+def test_progress_matches_mismatched_sale_filter_returns_false():
+    p = {"category_url": "https://x.com/cat", "sale_filter": "On sale"}
+    assert progress.progress_matches(p, "https://x.com/cat", "All items") is False
+
+
+def test_progress_matches_exact_match_returns_true():
+    p = {"category_url": "https://x.com/cat", "sale_filter": "All items"}
+    assert progress.progress_matches(p, "https://x.com/cat", "All items") is True
+
+
+def test_progress_matches_ignores_completed_field():
+    p = {"category_url": "https://x.com/cat", "sale_filter": "All items", "completed": True}
+    assert progress.progress_matches(p, "https://x.com/cat", "All items") is True
+
+
+def test_is_completed_none_progress_returns_false():
+    assert progress.is_completed(None) is False
+
+
+def test_is_completed_missing_key_defaults_false():
+    assert progress.is_completed({"category_url": "x"}) is False
+
+
+def test_is_completed_true_when_flag_set():
+    assert progress.is_completed({"completed": True}) is True
+
+
+def test_is_completed_false_when_flag_explicitly_false():
+    assert progress.is_completed({"completed": False}) is False

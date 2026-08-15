@@ -7,8 +7,10 @@ from config import BASE_URL, FAIL_FILE, OUTPUT_DIR
 from connectivity import is_online
 from progress import (
     get_cc_file_count,
+    is_completed,
     load_cc_numbers,
     load_progress,
+    progress_matches,
     save_cc_number,
     save_progress,
     start_new_run,
@@ -263,20 +265,15 @@ def scrape_category(
 ):
     # Reset for a genuinely new category/filter (or bail out on an
     # already-completed one) before pagination runs, not after -- otherwise
-    # the old run's output
-    # file sits there stale, looking live, for the entire time it takes to
-    # page through the new category.
+    # the old run's output file sits there stale, looking live, for the
+    # entire time it takes to page through the new category.
     progress = load_progress()
 
-    if (
-        progress is None
-        or progress.get("sale_filter") != sale_filter
-        or progress.get("category_url") != category_url
-    ):
+    if not progress_matches(progress, category_url, sale_filter):
         start_new_run(category_url, sale_filter)
         progress = load_progress()
 
-    elif progress.get("completed", False):
+    elif is_completed(progress):
         return
 
     product_urls, skipped_products = get_retail_product_urls(
