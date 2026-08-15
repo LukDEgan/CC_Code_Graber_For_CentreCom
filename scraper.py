@@ -4,6 +4,7 @@ from urllib.parse import urljoin
 import playwright.sync_api
 
 from config import BASE_URL, FAIL_FILE, OUTPUT_DIR
+from connectivity import is_online
 from progress import (
     get_cc_file_count,
     load_cc_numbers,
@@ -15,6 +16,10 @@ from progress import (
 
 
 class BrowserClosedError(Exception):
+    pass
+
+
+class NetworkDisconnectedError(Exception):
     pass
 
 
@@ -36,6 +41,8 @@ def goto(page, url):
     except Exception as error:
         if is_browser_closed_error(page, error):
             raise BrowserClosedError("Browser window was closed") from error
+        if not is_online():
+            raise NetworkDisconnectedError("Network connection was lost") from error
         raise
 
 def is_in_stock_adelaide(page):
@@ -193,7 +200,7 @@ def check_product(
             page.goto(
                 product_url,
                 wait_until="domcontentloaded",
-                timeout=30000
+                timeout=20000
             )
 
             if sale_status == "unknown":
@@ -213,6 +220,9 @@ def check_product(
         except Exception as error:
             if is_browser_closed_error(page, error):
                 raise BrowserClosedError("Browser window was closed") from error
+
+            if not is_online():
+                raise NetworkDisconnectedError("Network connection was lost") from error
 
             if attempt == retries:
                 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -349,6 +359,7 @@ def scrape_category(
                 cc_number=cc_number,
                 cc_count=cc_count
             )
+
 
         # next_index always points at the NEXT product to process.
         save_progress(

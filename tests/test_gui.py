@@ -7,7 +7,7 @@ from conftest import requires_tk, run_in_mainloop
 
 import gui as gui_module
 import progress as progress_module
-from scraper import BrowserClosedError
+from scraper import BrowserClosedError, NetworkDisconnectedError
 
 pytestmark = requires_tk
 
@@ -480,6 +480,46 @@ def test_run_scraper_browser_closed_freezes_progress_instead_of_completing(
     assert results["progress_max"] == 20
     assert results["start_state"] == "normal"
     assert results["stop_state"] == "disabled"
+
+
+def test_run_scraper_network_disconnected_stops_and_updates_connection_indicator(
+    app_paths, monkeypatch
+):
+    progress_module.save_progress(
+        "https://www.centrecom.com.au/cat", "All items", 5, 3, 0, completed=False
+    )
+
+    monkeypatch.setattr(gui_module, "validate_category_url", lambda page, url: (url, None))
+    monkeypatch.setattr(gui_module, "sync_playwright", fake_sync_playwright_context)
+
+    def fake_scrape_category(*a, **kw):
+        raise NetworkDisconnectedError("Network connection was lost")
+
+    monkeypatch.setattr(gui_module, "scrape_category", fake_scrape_category)
+
+    root, app = make_app()
+    results = {}
+
+    def start():
+        app.update_product_progress(5, 20, 3)
+        app.run_scraper("https://www.centrecom.com.au/cat", "All items")
+
+    def capture():
+        results["status"] = app.status_label.cget("text")
+        results["start_state"] = str(app.start_button.cget("state"))
+        results["stop_state"] = str(app.stop_button.cget("state"))
+        results["connection_text"] = app.connection_label.cget("text")
+        results["connection_color"] = str(app.connection_label.cget("foreground"))
+
+    run_in_mainloop(root, [(100, start), (300, capture)])
+
+    assert results["status"] == (
+        "Stopped — network connection was lost. Reconnect and click Start to resume."
+    )
+    assert results["start_state"] == "normal"
+    assert results["stop_state"] == "disabled"
+    assert results["connection_text"] == "● Offline — no internet connection"
+    assert results["connection_color"] == "red"
 
 
 # ---------------------------------------------------------------------------

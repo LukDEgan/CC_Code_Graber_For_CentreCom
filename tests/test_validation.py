@@ -1,7 +1,17 @@
 import pytest
 
+import scraper
 import validation
-from scraper import BrowserClosedError
+from scraper import BrowserClosedError, NetworkDisconnectedError
+
+
+@pytest.fixture(autouse=True)
+def default_online(monkeypatch):
+    # goto() (shared with scraper.py) falls back to checking is_online() on
+    # any non-browser-closed error. Default to "online" so existing
+    # generic-failure tests exercise the friendly-error path rather than a
+    # real network call; the offline-specific test below overrides this.
+    monkeypatch.setattr(scraper, "is_online", lambda: True)
 
 
 class FakeLocator:
@@ -101,6 +111,13 @@ def test_validate_goto_generic_failure_returns_friendly_error():
 def test_validate_goto_failure_with_closed_page_raises_browser_closed():
     page = FakePage(goto_error=Exception("boom"), closed=True)
     with pytest.raises(BrowserClosedError):
+        validation.validate_category_url(page, "https://www.centrecom.com.au/cat")
+
+
+def test_validate_goto_failure_while_offline_raises_network_disconnected(monkeypatch):
+    monkeypatch.setattr(scraper, "is_online", lambda: False)
+    page = FakePage(goto_error=Exception("net::ERR_INTERNET_DISCONNECTED"))
+    with pytest.raises(NetworkDisconnectedError):
         validation.validate_category_url(page, "https://www.centrecom.com.au/cat")
 
 

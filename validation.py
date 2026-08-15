@@ -1,6 +1,11 @@
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from scraper import BrowserClosedError, goto, is_browser_closed_error
+from scraper import (
+    BrowserClosedError,
+    NetworkDisconnectedError,
+    goto,
+    is_browser_closed_error,
+)
 
 
 def normalise_url(url):
@@ -40,7 +45,7 @@ def validate_category_url(page, category_url):
 
     try:
         goto(page, category_url)
-    except BrowserClosedError:
+    except (BrowserClosedError, NetworkDisconnectedError):
         raise
     except Exception:
         return None, "Could not load page"

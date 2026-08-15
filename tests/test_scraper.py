@@ -4,7 +4,7 @@ import pytest
 
 import progress as progress_module
 import scraper
-from scraper import BrowserClosedError
+from scraper import BrowserClosedError, NetworkDisconnectedError
 
 # ---------------------------------------------------------------------------
 # Pure helpers
@@ -166,6 +166,10 @@ def fail_paths(tmp_path, monkeypatch):
     fail_file = output_dir / "failed.txt"
     monkeypatch.setattr(scraper, "OUTPUT_DIR", str(output_dir))
     monkeypatch.setattr(scraper, "FAIL_FILE", str(fail_file))
+    # Default to "online" so existing per-product-failure tests exercise the
+    # normal retry path rather than a real network call to check_product's
+    # is_online() fallback. Tests for the offline path override this.
+    monkeypatch.setattr(scraper, "is_online", lambda: True)
     return fail_file
 
 
@@ -238,6 +242,21 @@ def test_check_product_generic_playwright_error_without_closed_message_is_normal
     result = scraper.check_product(page, "http://x.com/p", "sale", "All items", retries=0)
 
     assert result == (None, True, "sale")
+
+
+def test_check_product_raises_network_disconnected_when_offline(fail_paths, monkeypatch):
+    # A dropped wifi/ethernet connection must stop the run immediately rather
+    # than retrying and racing through every remaining product as an instant
+    # "failure" (which previously looked like the scrape "continuing as if
+    # nothing had happened").
+    monkeypatch.setattr(scraper, "is_online", lambda: False)
+    page = FakePage(goto_error=Exception("net::ERR_INTERNET_DISCONNECTED"))
+
+    with pytest.raises(NetworkDisconnectedError):
+        scraper.check_product(page, "http://x.com/p", "sale", "All items")
+
+    assert not fail_paths.exists()
+    assert len(page.goto_calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -414,6 +433,38 @@ def test_scrape_category_propagates_browser_closed_mid_loop(progress_paths, monk
 
     events = []
     with pytest.raises(BrowserClosedError):
+        scraper.scrape_category(
+            page=None,
+            category_url="http://x.com/cat",
+            sale_filter="All items",
+            on_progress=lambda event, data: events.append(event),
+        )
+
+    assert "complete" not in events
+    data = progress_module.load_progress()
+    assert data["next_index"] == 1
+    assert data["completed"] is False
+
+
+def test_scrape_category_propagates_network_disconnected_mid_loop(progress_paths, monkeypatch):
+    monkeypatch.setattr(
+        scraper,
+        "get_retail_product_urls",
+        lambda *a, **kw: (fake_products(3), 0),
+    )
+
+    call_count = {"n": 0}
+
+    def fake_check_product(page, url, status, sale_filter):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return (url[-1], False, "sale")
+        raise NetworkDisconnectedError("Network connection was lost")
+
+    monkeypatch.setattr(scraper, "check_product", fake_check_product)
+
+    events = []
+    with pytest.raises(NetworkDisconnectedError):
         scraper.scrape_category(
             page=None,
             category_url="http://x.com/cat",

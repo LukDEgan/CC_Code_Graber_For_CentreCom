@@ -10,7 +10,7 @@ from config import CONNECTION_POLL_INTERVAL_MS, NOT_SALE_FILE, OUTPUT_DIR, SALE_
 from connectivity import is_online
 from file_actions import open_path
 from progress import clear_opposite_file, count_lines, load_progress, start_new_run
-from scraper import BrowserClosedError, scrape_category
+from scraper import BrowserClosedError, NetworkDisconnectedError, scrape_category
 from validation import normalise_url, validate_category_url
 
 
@@ -566,6 +566,14 @@ class TicketApp:
                 0,
                 self.set_status,
                 "Stopped — the browser window was closed. Click Start to resume."
+            )
+
+        except NetworkDisconnectedError:
+            self._safe_after(0, self.update_connection_status, False)
+            self._safe_after(
+                0,
+                self.set_status,
+                "Stopped — network connection was lost. Reconnect and click Start to resume."
             )
 
         except Exception as e:
