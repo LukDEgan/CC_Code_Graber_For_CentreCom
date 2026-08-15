@@ -227,11 +227,17 @@ def test_output_summary_reflects_reopened_incomplete_session(app_paths):
     assert results["color"] == "orange"
 
 
-def test_switching_filter_clears_opposite_file_and_updates_summary(app_paths, monkeypatch):
-    # Simulate stale not-sale data from a previous "All items" run, then
-    # switch to a new category with a single-status filter. clear_opposite_file
-    # only runs once the new URL is confirmed valid (inside run_scraper), so
-    # validation/scrape_category must be stubbed rather than run_scraper itself.
+def test_new_category_resets_both_output_files_before_scrape_runs(app_paths, monkeypatch):
+    # Regression test: a category/filter mismatch must fully reset both
+    # output files and progress.json synchronously, in run_scraper itself,
+    # before scrape_category is ever invoked -- not rely on scrape_category's
+    # own reset to run later (or on the browser navigating pages first).
+    # Otherwise a run stopped while still listing pages (or, in a real
+    # multi-threaded run, a UI refresh racing the reset) can leave stale
+    # codes from the previous category sitting in the output files while the
+    # summary already claims to be showing the new one. Stubbing
+    # scrape_category as a true no-op proves the reset is entirely gui.py's
+    # own doing, independent of whatever scrape_category does afterward.
     app_paths["output_dir"].mkdir(exist_ok=True)
     app_paths["sale_file"].write_text("111111\n", encoding="utf-8")
     app_paths["not_sale_file"].write_text("222222\n", encoding="utf-8")
@@ -241,15 +247,7 @@ def test_switching_filter_clears_opposite_file_and_updates_summary(app_paths, mo
 
     monkeypatch.setattr(gui_module, "sync_playwright", fake_sync_playwright_context)
     monkeypatch.setattr(gui_module, "validate_category_url", lambda page, url: (url, None))
-
-    # A real scrape_category writes fresh progress for the new category/filter
-    # as its first action on a mismatch (via start_new_run); stub just that
-    # part so run_scraper's end-of-run summary refresh sees consistent state,
-    # without the stub also wiping the sale file clear_opposite_file kept.
-    def fake_scrape_category(page, category_url, sale_filter, **kw):
-        progress_module.save_progress(category_url, sale_filter, 0, 0, 0, completed=False)
-
-    monkeypatch.setattr(gui_module, "scrape_category", fake_scrape_category)
+    monkeypatch.setattr(gui_module, "scrape_category", lambda *a, **kw: None)
 
     root, app = make_app()
     results = {}
@@ -264,15 +262,31 @@ def test_switching_filter_clears_opposite_file_and_updates_summary(app_paths, mo
         results["sale_content"] = app_paths["sale_file"].read_text(encoding="utf-8")
         results["url"] = app.output_url_label.cget("text")
         results["filter"] = app.output_filter_label.cget("text")
+        results["sale_button_state"] = str(app.copy_sale_button.cget("state"))
         results["not_sale_button_state"] = str(app.copy_not_sale_button.cget("state"))
+        results["progress"] = progress_module.load_progress()
 
     run_in_mainloop(root, [(100, switch), (300, capture)])
 
     assert results["not_sale_content"] == ""
-    assert results["sale_content"] == "111111\n"
-    assert results["url"] == "https://www.centrecom.com.au/new-cat"
-    assert results["filter"] == "Filter: On sale"
+    assert results["sale_content"] == ""
+    # With a true no-op scrape_category, the run ends with a fresh,
+    # incomplete, empty-output progress record -- run_scraper's end-of-run
+    # _refresh_output_summary correctly collapses that to "No scan yet"
+    # (there's nothing to show or copy), rather than claiming "new-cat" was
+    # actually scanned.
+    assert results["url"] == "No scan yet"
+    assert results["filter"] == ""
+    assert results["sale_button_state"] == "disabled"
     assert results["not_sale_button_state"] == "disabled"
+    assert results["progress"] == {
+        "category_url": "https://www.centrecom.com.au/new-cat",
+        "sale_filter": "On sale",
+        "next_index": 0,
+        "cc_count": 0,
+        "fail_count": 0,
+        "completed": False,
+    }
 
 
 def test_invalid_url_does_not_change_output_summary(app_paths, monkeypatch):

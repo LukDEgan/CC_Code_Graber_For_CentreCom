@@ -10,7 +10,6 @@ from config import CONNECTION_POLL_INTERVAL_MS, NOT_SALE_FILE, OUTPUT_DIR, SALE_
 from connectivity import is_online
 from file_actions import open_path
 from progress import (
-    clear_opposite_file,
     count_lines,
     is_completed,
     load_progress,
@@ -583,7 +582,14 @@ class TicketApp:
 
                 progress = load_progress()
                 if not progress_matches(progress, category_url, sale_filter):
-                    clear_opposite_file(sale_filter)
+                    # Reset synchronously, right here, before scheduling any UI
+                    # refresh -- start_new_run truncates every output file plus
+                    # progress.json in one call on this thread, so by the time
+                    # reset_display/_set_output_summary run on the Tk mainloop
+                    # (whenever that turns out to be) there's no window where
+                    # they could read a stale, not-yet-truncated file left over
+                    # from the previous category/filter.
+                    start_new_run(category_url, sale_filter)
                     self._safe_after(0, self.reset_display)
                     self._safe_after(0, self._set_output_summary, category_url, sale_filter)
 

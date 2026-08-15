@@ -25,15 +25,6 @@ def start_new_run(category_url, sale_filter):
     save_progress(category_url, sale_filter, 0, 0, 0)
 
 
-def clear_opposite_file(sale_filter):
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-    if sale_filter == "On sale":
-        open(NOT_SALE_FILE, "w", encoding="utf-8").close()
-    elif sale_filter == "Not on sale":
-        open(SALE_FILE, "w", encoding="utf-8").close()
-
-
 PROGRESS_KEYS = {
     "category_url",
     "sale_filter",

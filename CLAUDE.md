@@ -69,12 +69,24 @@ browser binaries. After `pip install -r requirements.txt`, Playwright also needs
   `completed`, status becomes `"Stopped"` (not left on `"Stopping..."`); if it did complete in that
   same window, the `"complete"`-event status is left alone.
 - **The "Output" section (summary label + Copy buttons) only reflects confirmed, validated scans.**
-  `_begin_scrape` no longer touches it eagerly on a category/filter mismatch — `clear_opposite_file`,
+  `_begin_scrape` no longer touches it eagerly on a category/filter mismatch — `start_new_run`,
   `reset_display`, and `_set_output_summary` all moved into `run_scraper`, right after
   `validate_category_url` succeeds. Typing an invalid/rejected URL and clicking Start now leaves
   the summary and Copy buttons showing the last real, valid scan untouched instead of jumping to
   the not-yet-validated input. Keep this ordering if you touch `_begin_scrape`/`run_scraper` again —
   it's easy to reintroduce eager updates that leak an unvalidated URL into the UI.
+  On a mismatch, `run_scraper` calls `start_new_run(category_url, sale_filter)` itself,
+  synchronously, *before* scheduling `reset_display`/`_set_output_summary` via `_safe_after` —
+  not just clearing the excluded status's file and leaving the rest for `scrape_category` to
+  reset later. `_safe_after` only *schedules* a callback on the Tk mainloop; it doesn't run
+  synchronously with the background scrape thread, so if the reset itself were left for later
+  (or for a separate call), there'd be a window where a UI refresh could read old output files
+  before they were actually truncated — which is exactly what let a stopped-mid-pagination run
+  keep showing stale codes from the previous category. Doing the full reset first, before
+  anything is scheduled, closes that window by construction. `scrape_category` still carries
+  its own independent mismatch-and-reset check (see the `scraper.py` entry below) as a safety
+  net for callers that don't go through `run_scraper`; by the time the GUI's own reset has
+  already run, that check simply finds nothing to do.
 - `scraper.py` — core scraping logic: paginate the category, filter by sale status, check
   Adelaide retail stock, extract CC codes. `check_product` resolves and returns each product's
   final sale status ("sale"/"not_sale") so the caller knows which output file to write to. Has
@@ -85,12 +97,11 @@ browser binaries. After `pip install -r requirements.txt`, Playwright also needs
   `output/sale_cc_numbers.txt` or `output/not_sale_cc_numbers.txt` depending on status;
   `get_cc_file_count`/`load_cc_numbers` read from both combined; `count_lines(filename)` is the
   public per-file line counter the GUI uses for the sale/not-sale split. `start_new_run`
-  truncates all three output files (sale, not-sale, failed) plus `progress.json`. `clear_opposite_file(sale_filter)`
-  empties just the file for the excluded status (e.g. clears not-sale when filtering to "On sale")
-  — `gui.py`'s `run_scraper` calls this right after the new category/filter combo's URL is
-  successfully validated (not before — see the `gui.py` entry above), so a stale file from an
-  unrelated previous run never sits there with a live Copy button, but an invalid URL attempt
-  also never touches it. `save_progress` writes atomically (temp
+  truncates all three output files (sale, not-sale, failed) plus `progress.json` — `gui.py`'s
+  `run_scraper` calls this right after the new category/filter combo's URL is successfully
+  validated (not before — see the `gui.py` entry above), so a stale file from an unrelated
+  previous run never sits there with a live Copy button, but an invalid URL attempt also never
+  touches it. `save_progress` writes atomically (temp
   file + `os.replace`) and `load_progress` validates the parsed JSON is a dict with all expected
   keys — both guard against a crash mid-write or a hand-edited file silently corrupting state.
 - `scraper.py`'s `BrowserClosedError` — raised (via the shared `goto` helper, used by both

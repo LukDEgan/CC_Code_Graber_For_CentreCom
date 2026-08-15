@@ -95,40 +95,6 @@ def test_start_new_run_truncates_all_three_files_and_resets_progress(paths):
     assert data["completed"] is False
 
 
-def test_clear_opposite_file_on_sale_clears_not_sale_only(paths):
-    paths["output_dir"].mkdir()
-    paths["sale_file"].write_text("111111\n", encoding="utf-8")
-    paths["not_sale_file"].write_text("222222\n", encoding="utf-8")
-
-    progress.clear_opposite_file("On sale")
-
-    assert paths["sale_file"].read_text(encoding="utf-8") == "111111\n"
-    assert paths["not_sale_file"].read_text(encoding="utf-8") == ""
-
-
-def test_clear_opposite_file_not_on_sale_clears_sale_only(paths):
-    paths["output_dir"].mkdir()
-    paths["sale_file"].write_text("111111\n", encoding="utf-8")
-    paths["not_sale_file"].write_text("222222\n", encoding="utf-8")
-
-    progress.clear_opposite_file("Not on sale")
-
-    assert paths["sale_file"].read_text(encoding="utf-8") == ""
-    assert paths["not_sale_file"].read_text(encoding="utf-8") == "222222\n"
-
-
-@pytest.mark.parametrize("sale_filter", ["All items", "", "something else"])
-def test_clear_opposite_file_other_values_are_noop(paths, sale_filter):
-    paths["output_dir"].mkdir()
-    paths["sale_file"].write_text("111111\n", encoding="utf-8")
-    paths["not_sale_file"].write_text("222222\n", encoding="utf-8")
-
-    progress.clear_opposite_file(sale_filter)
-
-    assert paths["sale_file"].read_text(encoding="utf-8") == "111111\n"
-    assert paths["not_sale_file"].read_text(encoding="utf-8") == "222222\n"
-
-
 def test_count_lines_missing_file_returns_zero(paths):
     assert progress.count_lines(str(paths["sale_file"])) == 0
 
