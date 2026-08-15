@@ -1,7 +1,9 @@
-import re
+import os
 from urllib.parse import urljoin
 
-from config import BASE_URL, FAIL_FILE
+import playwright.sync_api
+
+from config import BASE_URL, FAIL_FILE, OUTPUT_DIR
 from progress import (
     get_cc_file_count,
     load_cc_numbers,
@@ -12,9 +14,29 @@ from progress import (
 )
 
 
+class BrowserClosedError(Exception):
+    pass
+
+
 def report_progress(callback, event, **data):
     if callback:
         callback(event, data)
+
+
+def is_browser_closed_error(page, error):
+    if page.is_closed():
+        return True
+
+    return isinstance(error, playwright.sync_api.Error) and "closed" in str(error).lower()
+
+
+def goto(page, url):
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    except Exception as error:
+        if is_browser_closed_error(page, error):
+            raise BrowserClosedError("Browser window was closed") from error
+        raise
 
 def is_in_stock_adelaide(page):
     adelaide = page.locator(
@@ -51,10 +73,16 @@ def build_page_url(category_url, page_number):
     separator = "&" if "?" in category_url else "?"
     return f"{category_url}{separator}pagenumber={page_number}"
 
-def get_retail_product_urls(page, category_url, sale_filter="All items", on_progress=None, stop_event=None):
+def get_retail_product_urls(
+    page,
+    category_url,
+    sale_filter="All items",
+    on_progress=None,
+    stop_event=None,
+):
     product_urls = []
 
-    page.goto(category_url, wait_until="domcontentloaded", timeout=30000)
+    goto(page, category_url)
 
     is_deal_page = page.locator("#deal-products-wrap").count()>0
     if is_deal_page:
@@ -80,7 +108,7 @@ def get_retail_product_urls(page, category_url, sale_filter="All items", on_prog
             total=total_pages
         )
 
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        goto(page, url)
         if is_deal_page:
             products = page.locator("div.deal-grid-box")
         else:
@@ -172,25 +200,29 @@ def check_product(
                 sale_status = get_product_page_sale_status(page)
 
             if sale_filter == "On sale" and sale_status != "sale":
-                return None, False
+                return None, False, sale_status
 
             if sale_filter == "Not on sale" and sale_status != "not_sale":
-                return None, False
+                return None, False, sale_status
 
             if is_in_stock_adelaide(page):
-                return get_cc_number(page), False
+                return get_cc_number(page), False, sale_status
 
-            return None, False
+            return None, False, sale_status
 
         except Exception as error:
+            if is_browser_closed_error(page, error):
+                raise BrowserClosedError("Browser window was closed") from error
+
             if attempt == retries:
+                os.makedirs(OUTPUT_DIR, exist_ok=True)
                 with open(FAIL_FILE, "a", encoding="utf-8") as file:
                     file.write(product_url + "\n")
 
                 print(f"Failed permanently: {product_url}")
                 print(f"Reason: {error}")
 
-                return None, True
+                return None, True, sale_status
 
             print(f"Retrying {product_url}...")
 
@@ -211,8 +243,21 @@ def get_sale_status(product):
 
     return "not_sale"
 
-def scrape_category(page, category_url, sale_filter="All items", on_progress=None, stop_event=None):
-    product_urls, skipped_products = get_retail_product_urls(page, category_url, sale_filter, on_progress, stop_event)
+def scrape_category(
+    page,
+    category_url,
+    sale_filter="All items",
+    on_progress=None,
+    stop_event=None,
+):
+    product_urls, skipped_products = get_retail_product_urls(
+        page, category_url, sale_filter, on_progress, stop_event
+    )
+
+    if stop_event and stop_event.is_set():
+        print("Scrape stopped by user while listing products.")
+        return load_cc_numbers()
+
     print(f"TOTAL PRODUCTS SCANNED: {skipped_products+len(product_urls)}")
     print(f"Found {len(product_urls)} products")
     print(f"Preemptively skipped {skipped_products} products due to grey icon or obvious sale filter")
@@ -283,7 +328,9 @@ def scrape_category(page, category_url, sale_filter="All items", on_progress=Non
             total=len(product_urls),
             cc_count=cc_count
         )
-        cc_number, failed = check_product(page, product_url, product_sale_status, sale_filter)
+        cc_number, failed, resolved_status = check_product(
+            page, product_url, product_sale_status, sale_filter
+        )
         if failed:
             fail_count += 1
 
@@ -293,7 +340,7 @@ def scrape_category(page, category_url, sale_filter="All items", on_progress=Non
                 fail_count=fail_count
             )
         if cc_number is not None:
-            save_cc_number(cc_number)
+            save_cc_number(cc_number, resolved_status)
             cc_count += 1
             report_progress(
                 on_progress,
