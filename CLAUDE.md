@@ -26,10 +26,11 @@ Copy buttons) into a separate internal ticket-generation website — the GUI is 
   `channel="msedge"` (Microsoft Edge, Chromium-based) rather than Playwright's own downloaded
   Chromium — Edge ships on every Windows 11 machine already, so the packaged .exe doesn't need to
   bundle or download a separate browser binary; see "Packaging / distribution" below. This means a
-  dev machine needs Edge installed too (not just `playwright install chromium`) to run from source
-  on Windows; on Linux/WSL dev environments Edge generally isn't present, so exercising the actual
-  scrape (not just the GUI/tests) needs a Windows or macOS machine with Edge. No
-  requests/BeautifulSoup/selenium.
+  dev machine needs Edge installed too (not just `playwright install chromium`), including on
+  Linux/WSL — install it from Microsoft's own apt repo (`packages.microsoft.com/repos/edge`,
+  package `microsoft-edge-stable`), not via `playwright install`, since `msedge` isn't one of
+  Playwright's downloadable/managed browsers (see "Packaging / distribution" below); confirmed
+  working under WSL2 with WSLg for the visible window. No requests/BeautifulSoup/selenium.
 - No external services, API keys, or `.env` — it's an unauthenticated public-site scraper.
 - Connectivity: `connectivity.py`'s `is_online()` does a raw TCP check (stdlib `socket`) against
   Centre Com, not a real HTTP request — cheap, no Playwright/browser needed. The GUI polls it
