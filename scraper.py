@@ -248,7 +248,6 @@ def get_sale_status(product):
         return "sale"
 
     if has_was_price or has_reg_price:
-        print("has a was sale")
         return "sale"
 
     if has_sale_price:
@@ -285,8 +284,8 @@ def scrape_category(
         return load_cc_numbers()
 
     print(f"TOTAL PRODUCTS SCANNED: {skipped_products+len(product_urls)}")
-    print(f"Found {len(product_urls)} retail-available products")
-    print(f"Skipped {skipped_products} products due to grey icon or sale filter")
+    print(f"Found {len(product_urls)} products")
+    print(f"Preemptively skipped {skipped_products} products due to grey icon or obvious sale filter")
 
     report_progress(
         on_progress,
