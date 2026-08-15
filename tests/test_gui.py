@@ -592,7 +592,7 @@ def fake_sync_playwright_context():
             pass
 
     class FakeChromium:
-        def launch(self, headless=False):
+        def launch(self, headless=False, channel=None):
             return FakeBrowser()
 
     class FakePlaywright:

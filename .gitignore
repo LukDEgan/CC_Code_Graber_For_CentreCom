@@ -4,3 +4,8 @@ __pycache__/
 .pytest_cache/
 output/
 progress.json
+
+# PyInstaller/Inno Setup build output (produced by packaging/, not committed)
+build/
+dist/
+dist_installer/

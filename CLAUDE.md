@@ -14,13 +14,22 @@ Copy buttons) into a separate internal ticket-generation website — the GUI is 
 
 ## Tech stack
 
-- Python 3.12, no packaging (flat scripts, no pyproject.toml/setup.py).
+- Python 3.12, no packaging for the app itself (flat scripts, no pyproject.toml/setup.py) — the
+  `packaging/` folder holds build-only tooling for the Windows installer, see "Packaging /
+  distribution" below; it doesn't change how the app runs from source.
 - GUI: `tkinter`/`ttk`, themed with **sv-ttk** (Sun Valley — native-looking Windows 11 Fluent
   style, light/dark). `sv_ttk.set_theme(...)` must be called before building widgets; named fonts
   like `"SunValleyBodyStrongFont"`/`"SunValleyTitleFont"`/`"SunValleyCaptionFont"` come from the
   theme, not tkinter itself.
-- Scraping: **Playwright** sync API driving a real, non-headless Chromium window (`headless=False`)
-  — requires a display, won't run headless/CI as-is. No requests/BeautifulSoup/selenium.
+- Scraping: **Playwright** sync API driving a real, non-headless browser window (`headless=False`)
+  — requires a display, won't run headless/CI as-is. `gui.py`'s `run_scraper` launches it with
+  `channel="msedge"` (Microsoft Edge, Chromium-based) rather than Playwright's own downloaded
+  Chromium — Edge ships on every Windows 11 machine already, so the packaged .exe doesn't need to
+  bundle or download a separate browser binary; see "Packaging / distribution" below. This means a
+  dev machine needs Edge installed too (not just `playwright install chromium`) to run from source
+  on Windows; on Linux/WSL dev environments Edge generally isn't present, so exercising the actual
+  scrape (not just the GUI/tests) needs a Windows or macOS machine with Edge. No
+  requests/BeautifulSoup/selenium.
 - No external services, API keys, or `.env` — it's an unauthenticated public-site scraper.
 - Connectivity: `connectivity.py`'s `is_online()` does a raw TCP check (stdlib `socket`) against
   Centre Com, not a real HTTP request — cheap, no Playwright/browser needed. The GUI polls it
@@ -33,9 +42,10 @@ Copy buttons) into a separate internal ticket-generation website — the GUI is 
 python main.py
 ```
 
-`requirements.txt` only pins Playwright's own transitive deps (from a `pip freeze`), not the
-browser binaries. After `pip install -r requirements.txt`, Playwright also needs
-`playwright install chromium` — not documented anywhere else in the repo.
+`requirements.txt` only pins Playwright's own transitive deps (from a `pip freeze`). No
+`playwright install ...` step is needed: the app launches via `channel="msedge"` (see "Tech
+stack" above), which uses whatever Edge install is already on the machine rather than a
+Playwright-managed browser — nothing to download.
 
 ## Key files
 
@@ -177,3 +187,47 @@ Two things to know before writing more tests here:
 - `output/` (sale/not-sale/failed files) and `progress.json` are run-time output/state, gitignored
   and untracked — don't commit fresh scrape output as if it were source changes.
 - Commits go directly to `main` (solo project, no branches/PRs).
+
+## Packaging / distribution
+
+Coworkers run a packaged Windows installer, not `python main.py` from source. Built entirely by
+CI — there is no local Windows machine in this project's dev loop, and PyInstaller can't
+cross-compile a Windows `.exe` from Linux/WSL.
+
+- `config.py` branches on `sys.frozen`: a PyInstaller build points `OUTPUT_DIR`/`PROGRESS_FILE` at
+  `%LOCALAPPDATA%\CentreComTicketGenerator\` instead of CWD-relative paths, since the installed app
+  lives in Program Files where a normal user can't write. Dev/test behavior (relative `output`/
+  `progress.json`) is untouched — `sys.frozen` is never set when running from source.
+- `packaging/CentreComTicketGenerator.spec` — PyInstaller spec, `--onedir` (not onefile: onefile
+  would re-extract Playwright's ~150MB+ driver payload to a temp dir on every launch, which is both
+  slow and a known source of driver-path bugs once frozen). Explicitly collects `sv_ttk`'s package
+  data (`.tcl` theme files + sprite PNGs — confirmed both `pyinstaller-hooks-contrib`'s own
+  `hook-sv_ttk.py` and the explicit `collect_data_files("sv_ttk")` fire; the explicit call is
+  redundant-but-harmless belt-and-suspenders). Playwright's own driver folder (the embedded Node.js
+  runtime + JS driver scripts the Python `sync_api` shells out to via subprocess — separate from
+  the browser itself) needs no manual entry: Playwright registers its own PyInstaller hook via a
+  `pyinstaller40` entry point, auto-discovered at build time. Spec files are `exec()`'d by
+  PyInstaller rather than imported, so `__file__` isn't defined inside one — use the `SPECPATH`
+  PyInstaller injects into the exec namespace instead (this repo's spec does).
+- `packaging/requirements-build.txt` — build-only deps (`pyinstaller`), kept separate from the
+  app's own `requirements.txt` since it's a build tool, not a runtime dependency.
+- `packaging/installer.iss` — Inno Setup script wrapping the PyInstaller `dist/` output into
+  `CentreComTicketGeneratorSetup.exe`: installs to Program Files (`PrivilegesRequired=admin`),
+  Start Menu shortcut, optional desktop shortcut, auto-generated uninstaller.
+- `.github/workflows/build-windows.yml` — two jobs. `test` runs the existing suite on
+  `ubuntu-latest` via `xvfb-run -a pytest -q` and gates the build. `build-windows` (depends on
+  `test`) runs on `windows-latest`: installs deps, runs PyInstaller against the spec, installs Inno
+  Setup via Chocolatey (confirmed **not** preinstalled on current `windows-latest` images — an
+  open `actions/runner-images` request, not a given), builds the installer, uploads it as a
+  workflow artifact, and — only when triggered by a `v*` tag push — attaches it to a GitHub
+  Release. Deliberately no `playwright install ...` step: `msedge` isn't one of Playwright's
+  managed/downloadable browsers (confirmed in the installed driver's `browsers.json` —
+  `installByDefault` only lists `chromium`/`chromium-headless-shell`/`firefox`/`webkit`/`ffmpeg`),
+  it's located purely by scanning known OS install paths, and `windows-latest` always ships Edge.
+- **To cut a release**: push a `v*` tag (e.g. `v1.0.1`). Coworkers download
+  `CentreComTicketGeneratorSetup.exe` from the repo's GitHub Releases page. `workflow_dispatch` is
+  also enabled for on-demand test builds (uploaded as a workflow artifact, not attached to a
+  release, since the release-attach step is gated on the tag-push trigger).
+- No code-signing certificate, so Windows SmartScreen will likely warn "Unknown publisher" on
+  first run of the installer (and possibly the app) — expected, not a bug; coworkers click "More
+  info → Run anyway."

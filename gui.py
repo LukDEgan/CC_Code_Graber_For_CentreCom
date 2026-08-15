@@ -563,7 +563,11 @@ class TicketApp:
 
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=False)
+                # channel="msedge" drives the OS-provided Edge install instead of
+                # Playwright's own downloaded Chromium -- Edge ships on every
+                # Windows 11 machine already, so the packaged .exe doesn't need
+                # to bundle or download a separate browser binary.
+                browser = p.chromium.launch(headless=False, channel="msedge")
                 page = browser.new_page()
 
                 category_url, error = validate_category_url(
