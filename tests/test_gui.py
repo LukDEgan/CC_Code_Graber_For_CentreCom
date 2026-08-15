@@ -508,9 +508,9 @@ def test_update_scan_scope_reports_skip_breakdown(app_paths):
     run_in_mainloop(root, [(100, apply), (200, capture)])
 
     assert results["text"] == (
-        "150 products found in this category — 120 are in stock at Adelaide "
-        "retail (and match the filter) and will be checked; 30 skipped (not "
-        "in stock at Adelaide retail, or excluded by the filter)."
+        "150 products total in this category\n"
+        "30 skipped (not available in retail stores, or excluded by the filter).\n"
+        "120 will be checked.\n"
     )
 
 
@@ -543,7 +543,7 @@ def test_handle_progress_listing_complete_updates_scan_scope_label(app_paths):
 
     run_in_mainloop(root, [(100, apply), (200, capture)])
 
-    assert "7 products found in this category" in results["text"]
+    assert "7 products total in this category" in results["text"]
     assert "2 skipped" in results["text"]
 
 

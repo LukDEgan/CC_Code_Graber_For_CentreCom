@@ -320,6 +320,67 @@ def test_scrape_category_normal_completion(progress_paths, monkeypatch):
     assert progress_paths["sale_file"].read_text(encoding="utf-8") == "0\n1\n"
 
 
+def test_scrape_category_already_completed_returns_without_paginating(
+    progress_paths, monkeypatch
+):
+    # Matching category/filter that's already completed should bail out
+    # before even listing the category -- there's nothing to do, so paging
+    # through every page just to hit the no-op completed check is wasted work.
+    progress_module.save_progress("http://x.com/cat", "All items", 2, 2, 0, completed=True)
+
+    def fail_if_called(*a, **kw):
+        raise AssertionError("get_retail_product_urls should not be called")
+
+    monkeypatch.setattr(scraper, "get_retail_product_urls", fail_if_called)
+
+    result = scraper.scrape_category(
+        page=None, category_url="http://x.com/cat", sale_filter="All items"
+    )
+
+    assert result is None
+    data = progress_module.load_progress()
+    assert data == {
+        "category_url": "http://x.com/cat",
+        "sale_filter": "All items",
+        "next_index": 2,
+        "cc_count": 2,
+        "fail_count": 0,
+        "completed": True,
+    }
+
+
+def test_scrape_category_resets_output_before_pagination_on_mismatch(
+    progress_paths, monkeypatch
+):
+    # The whole point of moving the reset earlier: a stale file from an old
+    # category must be gone *before* pagination starts, not after -- so it's
+    # never visible/copyable mid-listing as if it belonged to the new scan.
+    progress_module.save_progress("http://x.com/old-cat", "All items", 1, 1, 0, completed=True)
+    progress_paths["output_dir"].mkdir()
+    progress_paths["sale_file"].write_text("999999\n", encoding="utf-8")
+
+    seen_sale_file_content_during_listing = {}
+
+    def fake_get_retail_product_urls(page, category_url, sale_filter, on_progress, stop_event):
+        seen_sale_file_content_during_listing["content"] = progress_paths[
+            "sale_file"
+        ].read_text(encoding="utf-8")
+        return fake_products(1), 0
+
+    monkeypatch.setattr(scraper, "get_retail_product_urls", fake_get_retail_product_urls)
+    monkeypatch.setattr(
+        scraper,
+        "check_product",
+        lambda page, url, status, sale_filter: (url[-1], False, "sale"),
+    )
+
+    scraper.scrape_category(
+        page=None, category_url="http://x.com/new-cat", sale_filter="All items"
+    )
+
+    assert seen_sale_file_content_during_listing["content"] == ""
+
+
 def test_scrape_category_reports_listing_complete_with_skip_breakdown(
     progress_paths, monkeypatch
 ):

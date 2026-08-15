@@ -707,10 +707,9 @@ class TicketApp:
         if skipped:
             self.scan_scope_label.config(
                 text=(
-                    f"{category_total} products found in this category — {eligible} are in "
-                    f"stock at Adelaide retail (and match the filter) and will be checked; "
-                    f"{skipped} skipped (not in stock at Adelaide retail, or excluded by the "
-                    f"filter)."
+                    f"{category_total} products total in this category\n"
+                    f"{skipped} skipped (not available in retail stores, or excluded by the filter).\n"
+                    f"{eligible} will be checked.\n"
                 )
             )
         else:

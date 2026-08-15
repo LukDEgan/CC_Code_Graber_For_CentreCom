@@ -261,6 +261,24 @@ def scrape_category(
     on_progress=None,
     stop_event=None,
 ):
+    # Reset for a genuinely new category/filter (or bail out on an
+    # already-completed one) before pagination runs, not after -- otherwise
+    # the old run's output
+    # file sits there stale, looking live, for the entire time it takes to
+    # page through the new category.
+    progress = load_progress()
+
+    if (
+        progress is None
+        or progress.get("sale_filter") != sale_filter
+        or progress.get("category_url") != category_url
+    ):
+        start_new_run(category_url, sale_filter)
+        progress = load_progress()
+
+    elif progress.get("completed", False):
+        return
+
     product_urls, skipped_products = get_retail_product_urls(
         page, category_url, sale_filter, on_progress, stop_event
     )
@@ -281,19 +299,6 @@ def scrape_category(
         category_total=len(product_urls) + skipped_products,
     )
 
-    progress = load_progress()
-
-    if (
-        progress is None
-        or progress.get("sale_filter") != sale_filter
-        or progress.get("category_url") != category_url
-    ):
-        start_new_run(category_url, sale_filter)
-        progress = load_progress()
-
-    elif progress.get("completed", False):
-        return
-    
     next_index = progress.get("next_index", 0)
     cc_count = progress.get("cc_count", 0)
     fail_count = progress.get("fail_count", 0)
