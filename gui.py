@@ -207,13 +207,27 @@ class TicketApp:
 
         ttk.Label(section, text="Output", font="SunValleyBodyStrongFont").pack(anchor="w")
 
-        self.output_summary_label = ttk.Label(
+        self.output_url_label = ttk.Label(
             section,
             text="No scan yet",
             font="SunValleyCaptionFont",
             wraplength=540
         )
-        self.output_summary_label.pack(anchor="w", pady=(4, 0))
+        self.output_url_label.pack(anchor="w", pady=(4, 0))
+
+        self.output_filter_label = ttk.Label(
+            section,
+            text="",
+            font="SunValleyCaptionFont"
+        )
+        self.output_filter_label.pack(anchor="w")
+
+        self.output_status_label = ttk.Label(
+            section,
+            text="",
+            font="SunValleyCaptionFont"
+        )
+        self.output_status_label.pack(anchor="w")
 
         buttons = ttk.Frame(section)
         buttons.pack(fill="x", pady=(8, 0))
@@ -254,23 +268,50 @@ class TicketApp:
         )
 
     def _set_output_summary(self, category_url, sale_filter):
+        # Sets just the identity of the scan (URL + filter) and clears the
+        # completion line -- used when a scan is about to start/resume, before
+        # its outcome is known. _refresh_output_summary fills the completion
+        # line back in once the run stops, from the state actually on disk.
         if not category_url:
-            self.output_summary_label.config(text="No scan yet")
-            return
+            self.output_url_label.config(text="No scan yet")
+            self.output_filter_label.config(text="")
+        else:
+            self.output_url_label.config(text=category_url)
+            self.output_filter_label.config(text=f"Filter: {sale_filter}")
 
-        self.output_summary_label.config(
-            text=f"Showing results for: {category_url} ({sale_filter})"
-        )
+        self.output_status_label.config(text="")
 
     def _refresh_output_summary(self):
         progress = load_progress()
 
-        if progress:
-            self._set_output_summary(
-                progress.get("category_url", ""), progress.get("sale_filter", "")
+        sale_count = count_lines(SALE_FILE)
+        not_sale_count = count_lines(NOT_SALE_FILE)
+        completed = bool(progress and progress.get("completed", False))
+
+        # An incomplete run with no output yet (e.g. a freshly truncated
+        # progress.json) has nothing to show or copy -- treat it the same as
+        # no prior run at all rather than implying there's something to open.
+        if not progress or not (completed or sale_count or not_sale_count):
+            self._set_output_summary("", "")
+            return
+
+        self._set_output_summary(
+            progress.get("category_url", ""), progress.get("sale_filter", "")
+        )
+
+        if completed:
+            self.output_status_label.config(
+                text=f"Scan complete — {sale_count} sale, {not_sale_count} not on sale",
+                foreground="green"
             )
         else:
-            self._set_output_summary("", "")
+            self.output_status_label.config(
+                text=(
+                    f"Scan incomplete — stopped partway "
+                    f"({sale_count} sale, {not_sale_count} not on sale so far)"
+                ),
+                foreground="orange"
+            )
 
     def _copy_codes(self, filename, label):
         with open(filename, encoding="utf-8") as file:
@@ -597,6 +638,7 @@ class TicketApp:
             )
 
             self._safe_after(0, self._refresh_start_controls)
+            self._safe_after(0, self._refresh_output_summary)
 
     def handle_progress(self, event, data):
         if event == "page":

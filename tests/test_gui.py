@@ -134,13 +134,42 @@ def test_copy_sale_codes_puts_contents_on_clipboard(app_paths):
 def test_output_summary_shows_no_scan_yet_on_fresh_launch(app_paths):
     root, app = make_app()
     results = {}
-    run_in_mainloop(
-        root, [(100, lambda: results.update(text=app.output_summary_label.cget("text")))]
+
+    def capture():
+        results["url"] = app.output_url_label.cget("text")
+        results["filter"] = app.output_filter_label.cget("text")
+        results["status"] = app.output_status_label.cget("text")
+
+    run_in_mainloop(root, [(100, capture)])
+
+    assert results["url"] == "No scan yet"
+    assert results["filter"] == ""
+    assert results["status"] == ""
+
+
+def test_output_summary_shows_no_scan_yet_when_incomplete_run_has_no_output(app_paths):
+    # An incomplete run that never got as far as saving anything has nothing
+    # to open/copy -- must not be shown as if it were a real previous scan.
+    progress_module.save_progress(
+        "https://www.centrecom.com.au/prior-cat", "All items", 0, 0, 0, completed=False
     )
-    assert results["text"] == "No scan yet"
+
+    root, app = make_app()
+    results = {}
+
+    def capture():
+        results["url"] = app.output_url_label.cget("text")
+        results["filter"] = app.output_filter_label.cget("text")
+        results["status"] = app.output_status_label.cget("text")
+
+    run_in_mainloop(root, [(100, capture)])
+
+    assert results["url"] == "No scan yet"
+    assert results["filter"] == ""
+    assert results["status"] == ""
 
 
-def test_output_summary_reflects_reopened_previous_session(app_paths):
+def test_output_summary_reflects_reopened_completed_session(app_paths):
     app_paths["output_dir"].mkdir(exist_ok=True)
     app_paths["sale_file"].write_text("111111\n", encoding="utf-8")
     app_paths["progress_file"].write_text(
@@ -159,13 +188,43 @@ def test_output_summary_reflects_reopened_previous_session(app_paths):
 
     root, app = make_app()
     results = {}
-    run_in_mainloop(
-        root, [(100, lambda: results.update(text=app.output_summary_label.cget("text")))]
+
+    def capture():
+        results["url"] = app.output_url_label.cget("text")
+        results["filter"] = app.output_filter_label.cget("text")
+        results["status"] = app.output_status_label.cget("text")
+        results["color"] = str(app.output_status_label.cget("foreground"))
+
+    run_in_mainloop(root, [(100, capture)])
+
+    assert results["url"] == "https://www.centrecom.com.au/prior-cat"
+    assert results["filter"] == "Filter: All items"
+    assert results["status"] == "Scan complete — 1 sale, 0 not on sale"
+    assert results["color"] == "green"
+
+
+def test_output_summary_reflects_reopened_incomplete_session(app_paths):
+    app_paths["output_dir"].mkdir(exist_ok=True)
+    app_paths["sale_file"].write_text("111111\n", encoding="utf-8")
+    progress_module.save_progress(
+        "https://www.centrecom.com.au/prior-cat", "All items", 5, 1, 0, completed=False
     )
 
-    assert results["text"] == (
-        "Showing results for: https://www.centrecom.com.au/prior-cat (All items)"
-    )
+    root, app = make_app()
+    results = {}
+
+    def capture():
+        results["url"] = app.output_url_label.cget("text")
+        results["filter"] = app.output_filter_label.cget("text")
+        results["status"] = app.output_status_label.cget("text")
+        results["color"] = str(app.output_status_label.cget("foreground"))
+
+    run_in_mainloop(root, [(100, capture)])
+
+    assert results["url"] == "https://www.centrecom.com.au/prior-cat"
+    assert results["filter"] == "Filter: All items"
+    assert results["status"] == "Scan incomplete — stopped partway (1 sale, 0 not on sale so far)"
+    assert results["color"] == "orange"
 
 
 def test_switching_filter_clears_opposite_file_and_updates_summary(app_paths, monkeypatch):
@@ -182,7 +241,15 @@ def test_switching_filter_clears_opposite_file_and_updates_summary(app_paths, mo
 
     monkeypatch.setattr(gui_module, "sync_playwright", fake_sync_playwright_context)
     monkeypatch.setattr(gui_module, "validate_category_url", lambda page, url: (url, None))
-    monkeypatch.setattr(gui_module, "scrape_category", lambda *a, **kw: None)
+
+    # A real scrape_category writes fresh progress for the new category/filter
+    # as its first action on a mismatch (via start_new_run); stub just that
+    # part so run_scraper's end-of-run summary refresh sees consistent state,
+    # without the stub also wiping the sale file clear_opposite_file kept.
+    def fake_scrape_category(page, category_url, sale_filter, **kw):
+        progress_module.save_progress(category_url, sale_filter, 0, 0, 0, completed=False)
+
+    monkeypatch.setattr(gui_module, "scrape_category", fake_scrape_category)
 
     root, app = make_app()
     results = {}
@@ -195,24 +262,24 @@ def test_switching_filter_clears_opposite_file_and_updates_summary(app_paths, mo
     def capture():
         results["not_sale_content"] = app_paths["not_sale_file"].read_text(encoding="utf-8")
         results["sale_content"] = app_paths["sale_file"].read_text(encoding="utf-8")
-        results["summary"] = app.output_summary_label.cget("text")
+        results["url"] = app.output_url_label.cget("text")
+        results["filter"] = app.output_filter_label.cget("text")
         results["not_sale_button_state"] = str(app.copy_not_sale_button.cget("state"))
 
     run_in_mainloop(root, [(100, switch), (300, capture)])
 
     assert results["not_sale_content"] == ""
     assert results["sale_content"] == "111111\n"
-    assert results["summary"] == (
-        "Showing results for: https://www.centrecom.com.au/new-cat (On sale)"
-    )
+    assert results["url"] == "https://www.centrecom.com.au/new-cat"
+    assert results["filter"] == "Filter: On sale"
     assert results["not_sale_button_state"] == "disabled"
 
 
 def test_invalid_url_does_not_change_output_summary(app_paths, monkeypatch):
     # Regression test: entering an invalid/rejected URL and clicking Start
-    # must leave the "Showing results for" summary (and output buttons)
-    # exactly as they were -- reflecting the last real, valid scan -- rather
-    # than jumping to the not-yet-validated URL the user just typed.
+    # must leave the output summary (and output buttons) exactly as they
+    # were -- reflecting the last real, valid scan -- rather than jumping to
+    # the not-yet-validated URL the user just typed.
     app_paths["output_dir"].mkdir(exist_ok=True)
     app_paths["sale_file"].write_text("111111\n", encoding="utf-8")
     progress_module.save_progress(
@@ -236,15 +303,15 @@ def test_invalid_url_does_not_change_output_summary(app_paths, monkeypatch):
         app._begin_scrape()
 
     def capture():
-        results["summary"] = app.output_summary_label.cget("text")
+        results["url"] = app.output_url_label.cget("text")
+        results["filter"] = app.output_filter_label.cget("text")
         results["sale_button_text"] = app.copy_sale_button.cget("text")
         results["status"] = app.status_label.cget("text")
 
     run_in_mainloop(root, [(100, attempt_invalid), (300, capture)])
 
-    assert results["summary"] == (
-        "Showing results for: https://www.centrecom.com.au/old-cat (All items)"
-    )
+    assert results["url"] == "https://www.centrecom.com.au/old-cat"
+    assert results["filter"] == "Filter: All items"
     assert results["sale_button_text"] == "Copy Sale Codes (1)"
     assert results["status"] == "URL must be from Centre Com"
 
@@ -256,7 +323,14 @@ def test_valid_new_url_updates_summary_after_validation_succeeds(app_paths, monk
 
     monkeypatch.setattr(gui_module, "sync_playwright", fake_sync_playwright_context)
     monkeypatch.setattr(gui_module, "validate_category_url", lambda page, url: (url, None))
-    monkeypatch.setattr(gui_module, "scrape_category", lambda *a, **kw: None)
+
+    # Simulate a real scrape_category completing the (empty) new category, so
+    # the end-of-run summary refresh has something to reflect for it -- an
+    # incomplete run with no output would correctly collapse to "No scan yet".
+    def fake_scrape_category(page, category_url, sale_filter, **kw):
+        progress_module.save_progress(category_url, sale_filter, 0, 0, 0, completed=True)
+
+    monkeypatch.setattr(gui_module, "scrape_category", fake_scrape_category)
 
     root, app = make_app()
     results = {}
@@ -268,13 +342,13 @@ def test_valid_new_url_updates_summary_after_validation_succeeds(app_paths, monk
         app._begin_scrape()
 
     def capture():
-        results["summary"] = app.output_summary_label.cget("text")
+        results["url"] = app.output_url_label.cget("text")
+        results["filter"] = app.output_filter_label.cget("text")
 
     run_in_mainloop(root, [(100, attempt_valid), (300, capture)])
 
-    assert results["summary"] == (
-        "Showing results for: https://www.centrecom.com.au/new-cat (All items)"
-    )
+    assert results["url"] == "https://www.centrecom.com.au/new-cat"
+    assert results["filter"] == "Filter: All items"
 
 
 # ---------------------------------------------------------------------------
