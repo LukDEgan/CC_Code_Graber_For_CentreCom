@@ -273,6 +273,13 @@ def scrape_category(
     print(f"Found {len(product_urls)} retail-available products")
     print(f"Skipped {skipped_products} products due to grey icon or sale filter")
 
+    report_progress(
+        on_progress,
+        "listing_complete",
+        eligible=len(product_urls),
+        skipped=skipped_products,
+        category_total=len(product_urls) + skipped_products,
+    )
 
     progress = load_progress()
 

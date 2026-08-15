@@ -23,7 +23,7 @@ class TicketApp:
 
         root.title("Centre Com Ticket Generator")
         root.geometry("640x560")
-        root.minsize(800, 600)
+        root.minsize(800, 700)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         sv_ttk.set_theme("dark")
@@ -174,6 +174,14 @@ class TicketApp:
 
         self.progress_bar = ttk.Progressbar(status_frame, mode="determinate")
         self.progress_bar.pack(fill="x", pady=(8, 0))
+
+        self.scan_scope_label = ttk.Label(
+            status_frame,
+            text="",
+            font="SunValleyCaptionFont",
+            wraplength=540
+        )
+        self.scan_scope_label.pack(anchor="w", pady=(6, 0))
 
     def _build_stats(self, parent):
         stats = ttk.Frame(parent)
@@ -408,6 +416,7 @@ class TicketApp:
         self.product_value.config(text="0 / 0")
         self.cc_value.config(text="0")
         self.failed_value.config(text="0")
+        self.scan_scope_label.config(text="")
         self._refresh_output_buttons()
 
     def _refresh_start_controls(self):
@@ -648,6 +657,15 @@ class TicketApp:
                 f"Reading page {data['current']} of {data['total']}"
             )
 
+        elif event == "listing_complete":
+            self._safe_after(
+                0,
+                self.update_scan_scope,
+                data["eligible"],
+                data["skipped"],
+                data["category_total"]
+            )
+
         elif event == "product":
             self._safe_after(
                 0,
@@ -684,6 +702,21 @@ class TicketApp:
                 data["cc_count"]
             )
 
+
+    def update_scan_scope(self, eligible, skipped, category_total):
+        if skipped:
+            self.scan_scope_label.config(
+                text=(
+                    f"{category_total} products found in this category — {eligible} are in "
+                    f"stock at Adelaide retail (and match the filter) and will be checked; "
+                    f"{skipped} skipped (not in stock at Adelaide retail, or excluded by the "
+                    f"filter)."
+                )
+            )
+        else:
+            self.scan_scope_label.config(
+                text=f"All {category_total} products in this category will be checked."
+            )
 
     def update_product_progress(self, current, total, cc_count):
         self.progress_bar["maximum"] = total

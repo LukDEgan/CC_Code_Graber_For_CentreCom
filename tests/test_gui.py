@@ -491,6 +491,79 @@ def test_restart_scrape_resets_progress_and_starts_fresh(app_paths, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
+# Scan-scope label: explains the eligible/skipped product-count gap
+# ---------------------------------------------------------------------------
+
+
+def test_update_scan_scope_reports_skip_breakdown(app_paths):
+    root, app = make_app()
+    results = {}
+
+    def apply():
+        app.update_scan_scope(eligible=120, skipped=30, category_total=150)
+
+    def capture():
+        results["text"] = app.scan_scope_label.cget("text")
+
+    run_in_mainloop(root, [(100, apply), (200, capture)])
+
+    assert results["text"] == (
+        "150 products found in this category — 120 are in stock at Adelaide "
+        "retail (and match the filter) and will be checked; 30 skipped (not "
+        "in stock at Adelaide retail, or excluded by the filter)."
+    )
+
+
+def test_update_scan_scope_no_skips_shows_simple_message(app_paths):
+    root, app = make_app()
+    results = {}
+
+    def apply():
+        app.update_scan_scope(eligible=50, skipped=0, category_total=50)
+
+    def capture():
+        results["text"] = app.scan_scope_label.cget("text")
+
+    run_in_mainloop(root, [(100, apply), (200, capture)])
+
+    assert results["text"] == "All 50 products in this category will be checked."
+
+
+def test_handle_progress_listing_complete_updates_scan_scope_label(app_paths):
+    root, app = make_app()
+    results = {}
+
+    def apply():
+        app.handle_progress(
+            "listing_complete", {"eligible": 5, "skipped": 2, "category_total": 7}
+        )
+
+    def capture():
+        results["text"] = app.scan_scope_label.cget("text")
+
+    run_in_mainloop(root, [(100, apply), (200, capture)])
+
+    assert "7 products found in this category" in results["text"]
+    assert "2 skipped" in results["text"]
+
+
+def test_reset_display_clears_scan_scope_label(app_paths):
+    root, app = make_app()
+    results = {}
+
+    def apply():
+        app.update_scan_scope(eligible=5, skipped=2, category_total=7)
+        app.reset_display()
+
+    def capture():
+        results["text"] = app.scan_scope_label.cget("text")
+
+    run_in_mainloop(root, [(100, apply), (200, capture)])
+
+    assert results["text"] == ""
+
+
+# ---------------------------------------------------------------------------
 # BrowserClosedError handling in run_scraper
 # ---------------------------------------------------------------------------
 

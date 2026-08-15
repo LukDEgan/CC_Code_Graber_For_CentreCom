@@ -320,6 +320,36 @@ def test_scrape_category_normal_completion(progress_paths, monkeypatch):
     assert progress_paths["sale_file"].read_text(encoding="utf-8") == "0\n1\n"
 
 
+def test_scrape_category_reports_listing_complete_with_skip_breakdown(
+    progress_paths, monkeypatch
+):
+    # Products skipped due to a greyed-out in-store icon (or a sale-filter
+    # mismatch) mean the "total" the UI checks against is smaller than the
+    # category's real product count -- the caller needs the skip breakdown
+    # to explain that gap rather than let it look like a scanning bug.
+    monkeypatch.setattr(
+        scraper,
+        "get_retail_product_urls",
+        lambda *a, **kw: (fake_products(2), 30),
+    )
+    monkeypatch.setattr(
+        scraper,
+        "check_product",
+        lambda page, url, status, sale_filter: (url[-1], False, "sale"),
+    )
+
+    events = []
+    scraper.scrape_category(
+        page=None,
+        category_url="http://x.com/cat",
+        sale_filter="All items",
+        on_progress=lambda event, data: events.append((event, data)),
+    )
+
+    listing_events = [data for event, data in events if event == "listing_complete"]
+    assert listing_events == [{"eligible": 2, "skipped": 30, "category_total": 32}]
+
+
 def test_scrape_category_resumes_from_saved_index(progress_paths, monkeypatch):
     progress_module.save_progress("http://x.com/cat", "All items", 1, 1, 0, completed=False)
     progress_paths["output_dir"].mkdir()
