@@ -75,6 +75,35 @@ def make_app():
 
 
 # ---------------------------------------------------------------------------
+# parse_max_price
+# ---------------------------------------------------------------------------
+
+
+def test_parse_max_price_blank_returns_no_limit():
+    assert gui_module.parse_max_price("") == (None, None)
+
+
+def test_parse_max_price_valid_number():
+    assert gui_module.parse_max_price("500") == (500.0, None)
+
+
+def test_parse_max_price_strips_dollar_and_commas():
+    assert gui_module.parse_max_price("$1,500") == (1500.0, None)
+
+
+def test_parse_max_price_non_numeric_returns_error():
+    value, error = gui_module.parse_max_price("abc")
+    assert value is None
+    assert error == "Max price must be a number"
+
+
+def test_parse_max_price_zero_or_negative_returns_error():
+    value, error = gui_module.parse_max_price("0")
+    assert value is None
+    assert error == "Max price must be greater than 0"
+
+
+# ---------------------------------------------------------------------------
 # Output buttons + summary label
 # ---------------------------------------------------------------------------
 
@@ -181,6 +210,7 @@ def test_output_summary_reflects_reopened_completed_session(app_paths):
                 "cc_count": 1,
                 "fail_count": 0,
                 "completed": True,
+                "max_price": None,
             }
         ),
         encoding="utf-8",
@@ -286,6 +316,7 @@ def test_new_category_resets_both_output_files_before_scrape_runs(app_paths, mon
         "cc_count": 0,
         "fail_count": 0,
         "completed": False,
+        "max_price": None,
     }
 
 
@@ -378,7 +409,9 @@ def test_status_becomes_stopped_after_stop_resolves(app_paths, monkeypatch):
     monkeypatch.setattr(gui_module, "validate_category_url", lambda page, url: (url, None))
     monkeypatch.setattr(gui_module, "sync_playwright", fake_sync_playwright_context)
 
-    def fake_scrape_category(page, category_url, sale_filter, on_progress=None, stop_event=None):
+    def fake_scrape_category(
+        page, category_url, sale_filter, on_progress=None, stop_event=None, max_price=None
+    ):
         assert stop_event is not None and stop_event.is_set()
         return []
 
@@ -407,11 +440,12 @@ def test_start_button_becomes_resume_and_restart_enabled_after_stop(app_paths, m
 
     monkeypatch.setattr(gui_module, "validate_category_url", lambda page, url: (url, None))
     monkeypatch.setattr(gui_module, "sync_playwright", fake_sync_playwright_context)
-    monkeypatch.setattr(
-        gui_module,
-        "scrape_category",
-        lambda page, category_url, sale_filter, on_progress=None, stop_event=None: [],
-    )
+    def fake_scrape_category(
+        page, category_url, sale_filter, on_progress=None, stop_event=None, max_price=None
+    ):
+        return []
+
+    monkeypatch.setattr(gui_module, "scrape_category", fake_scrape_category)
 
     root, app = make_app()
     results = {}
@@ -429,6 +463,49 @@ def test_start_button_becomes_resume_and_restart_enabled_after_stop(app_paths, m
 
     assert results["start_text"] == "Resume"
     assert results["restart_state"] == "normal"
+
+
+def test_max_price_mismatch_prevents_resume(app_paths):
+    # A saved run scoped to a $500 max price must not look resumable once the
+    # field is blank (or set to a different value) -- price is part of the
+    # run's identity just like the URL/sale filter.
+    progress_module.save_progress(
+        "https://www.centrecom.com.au/cat", "All items", 2, 1, 0,
+        completed=False, max_price=500,
+    )
+
+    root, app = make_app()
+    results = {}
+
+    def check():
+        app.url_entry.insert(0, "https://www.centrecom.com.au/cat")
+        app._refresh_start_controls()
+        results["start_text"] = app.start_button.cget("text")
+        results["restart_state"] = str(app.restart_button.cget("state"))
+
+    run_in_mainloop(root, [(100, check)])
+
+    assert results["start_text"] == "Start"
+    assert results["restart_state"] == "disabled"
+
+
+def test_max_price_shown_in_output_summary(app_paths):
+    progress_module.save_progress(
+        "https://www.centrecom.com.au/cat", "All items", 1, 1, 0,
+        completed=True, max_price=500,
+    )
+    app_paths["output_dir"].mkdir(exist_ok=True)
+    app_paths["sale_file"].write_text("111111\n", encoding="utf-8")
+
+    root, app = make_app()
+    results = {}
+
+    def capture():
+        results["filter"] = app.output_filter_label.cget("text")
+
+    run_in_mainloop(root, [(100, capture)])
+
+    assert results["filter"] == "Filter: All items | Max price: $500"
 
 
 def test_refresh_start_controls_shows_start_when_no_matching_progress(app_paths):
@@ -477,7 +554,9 @@ def test_restart_scrape_resets_progress_and_starts_fresh(app_paths, monkeypatch)
 
     scrape_calls = []
 
-    def fake_scrape_category(page, category_url, sale_filter, on_progress=None, stop_event=None):
+    def fake_scrape_category(
+        page, category_url, sale_filter, on_progress=None, stop_event=None, max_price=None
+    ):
         scrape_calls.append((category_url, sale_filter))
         return []
 

@@ -15,14 +15,14 @@ def save_cc_number(cc_number, sale_status):
         file.write(cc_number + "\n")
 
 
-def start_new_run(category_url, sale_filter):
+def start_new_run(category_url, sale_filter, max_price=None):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     open(SALE_FILE, "w", encoding="utf-8").close()
     open(NOT_SALE_FILE, "w", encoding="utf-8").close()
     open(FAIL_FILE, "w", encoding="utf-8").close()
 
-    save_progress(category_url, sale_filter, 0, 0, 0)
+    save_progress(category_url, sale_filter, 0, 0, 0, max_price=max_price)
 
 
 PROGRESS_KEYS = {
@@ -32,10 +32,13 @@ PROGRESS_KEYS = {
     "cc_count",
     "fail_count",
     "completed",
+    "max_price",
 }
 
 
-def save_progress(category_url, sale_filter, next_index, cc_count, fail_count, completed=False):
+def save_progress(
+    category_url, sale_filter, next_index, cc_count, fail_count, completed=False, max_price=None
+):
     data = {
         "category_url": category_url,
         "sale_filter": sale_filter,
@@ -43,6 +46,7 @@ def save_progress(category_url, sale_filter, next_index, cc_count, fail_count, c
         "cc_count": cc_count,
         "fail_count": fail_count,
         "completed": completed,
+        "max_price": max_price,
     }
 
     tmp_file = PROGRESS_FILE + ".tmp"
@@ -68,11 +72,12 @@ def load_progress():
     return data
 
 
-def progress_matches(progress, category_url, sale_filter):
+def progress_matches(progress, category_url, sale_filter, max_price=None):
     return bool(
         progress
         and progress.get("category_url") == category_url
         and progress.get("sale_filter") == sale_filter
+        and progress.get("max_price") == max_price
     )
 
 

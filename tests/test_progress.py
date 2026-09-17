@@ -42,6 +42,7 @@ def test_save_and_load_progress_round_trip(paths):
         "cc_count": 3,
         "fail_count": 1,
         "completed": False,
+        "max_price": None,
     }
 
 
@@ -157,6 +158,16 @@ def test_progress_matches_exact_match_returns_true():
 def test_progress_matches_ignores_completed_field():
     p = {"category_url": "https://x.com/cat", "sale_filter": "All items", "completed": True}
     assert progress.progress_matches(p, "https://x.com/cat", "All items") is True
+
+
+def test_progress_matches_mismatched_max_price_returns_false():
+    p = {"category_url": "https://x.com/cat", "sale_filter": "All items", "max_price": 500}
+    assert progress.progress_matches(p, "https://x.com/cat", "All items", max_price=None) is False
+
+
+def test_progress_matches_matching_max_price_returns_true():
+    p = {"category_url": "https://x.com/cat", "sale_filter": "All items", "max_price": 500}
+    assert progress.progress_matches(p, "https://x.com/cat", "All items", max_price=500) is True
 
 
 def test_is_completed_none_progress_returns_false():

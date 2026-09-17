@@ -61,6 +61,67 @@ def test_get_sale_status_no_flags_is_not_sale():
     assert scraper.get_sale_status(FakeProductListing()) == "not_sale"
 
 
+# ---------------------------------------------------------------------------
+# Price extraction / max_price filtering
+# ---------------------------------------------------------------------------
+
+
+def test_parse_price_strips_dollar_sign_and_thousands_separator():
+    assert scraper.parse_price("$1,093") == 1093.0
+
+
+def test_parse_price_handles_decimal():
+    assert scraper.parse_price("$957.5") == 957.5
+
+
+def test_parse_price_unparsable_returns_none():
+    assert scraper.parse_price("Contact us") is None
+
+
+class FakePriceLocator:
+    def __init__(self, count, text=""):
+        self._count = count
+        self._text = text
+
+    def count(self):
+        return self._count
+
+    @property
+    def first(self):
+        return self
+
+    def inner_text(self):
+        return self._text
+
+
+class FakePricedProduct:
+    def __init__(self, saleprice=None, regprice=None):
+        self._saleprice = saleprice
+        self._regprice = regprice
+
+    def locator(self, selector):
+        if selector == ".saleprice":
+            return FakePriceLocator(1 if self._saleprice else 0, self._saleprice or "")
+        if selector == ".regprice":
+            return FakePriceLocator(1 if self._regprice else 0, self._regprice or "")
+        raise AssertionError(f"unexpected selector: {selector}")
+
+
+def test_get_listing_price_prefers_saleprice():
+    product = FakePricedProduct(saleprice="$749")
+    assert scraper.get_listing_price(product) == 749.0
+
+
+def test_get_listing_price_falls_back_to_regprice():
+    product = FakePricedProduct(regprice="$1,299")
+    assert scraper.get_listing_price(product) == 1299.0
+
+
+def test_get_listing_price_missing_both_returns_none():
+    product = FakePricedProduct()
+    assert scraper.get_listing_price(product) is None
+
+
 class FakeDealLabelPage:
     def __init__(self, has_deal_label):
         self._has_deal_label = has_deal_label
@@ -346,6 +407,7 @@ def test_scrape_category_already_completed_returns_without_paginating(
         "cc_count": 2,
         "fail_count": 0,
         "completed": True,
+        "max_price": None,
     }
 
 
@@ -361,7 +423,9 @@ def test_scrape_category_resets_output_before_pagination_on_mismatch(
 
     seen_sale_file_content_during_listing = {}
 
-    def fake_get_retail_product_urls(page, category_url, sale_filter, on_progress, stop_event):
+    def fake_get_retail_product_urls(
+        page, category_url, sale_filter, on_progress, stop_event, max_price=None
+    ):
         seen_sale_file_content_during_listing["content"] = progress_paths[
             "sale_file"
         ].read_text(encoding="utf-8")
@@ -476,7 +540,9 @@ def test_scrape_category_stop_during_relist_does_not_wipe_existing_progress(
     stop_event = threading.Event()
     stop_event.set()
 
-    def fake_get_retail_product_urls(page, category_url, sale_filter, on_progress, stop_event):
+    def fake_get_retail_product_urls(
+        page, category_url, sale_filter, on_progress, stop_event, max_price=None
+    ):
         # Simulates returning early, mid-pagination, with a short list.
         return fake_products(1), 0
 

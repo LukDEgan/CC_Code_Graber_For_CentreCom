@@ -20,6 +20,24 @@ from scraper import BrowserClosedError, NetworkDisconnectedError, scrape_categor
 from validation import normalise_url, validate_category_url
 
 
+def parse_max_price(text):
+    # Blank means "no limit" -- most scans have no price ceiling. Returns
+    # (max_price, error); error is only set for non-blank, unparsable input.
+    text = text.strip()
+    if not text:
+        return None, None
+
+    try:
+        value = float(text.lstrip("$").replace(",", ""))
+    except ValueError:
+        return None, "Max price must be a number"
+
+    if value <= 0:
+        return None, "Max price must be greater than 0"
+
+    return value, None
+
+
 class TicketApp:
     def __init__(self, root):
         self.root = root
@@ -139,6 +157,16 @@ class TicketApp:
         self.sale_filter.set("All items")
         self.sale_filter.grid(row=3, column=0, sticky="ew", pady=(6, 0))
         self.sale_filter.bind("<<ComboboxSelected>>", lambda event: self._refresh_start_controls())
+
+        ttk.Label(
+            form,
+            text="Max Price ($) — optional, held-behind-counter items",
+            font="SunValleyBodyStrongFont"
+        ).grid(row=4, column=0, sticky="w", pady=(16, 0))
+
+        self.max_price_entry = ttk.Entry(form)
+        self.max_price_entry.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+        self.max_price_entry.bind("<KeyRelease>", lambda event: self._refresh_start_controls())
 
     def _build_actions(self, parent):
         actions = ttk.Frame(parent)
@@ -281,7 +309,7 @@ class TicketApp:
             state="normal" if not_sale_count else "disabled"
         )
 
-    def _set_output_summary(self, category_url, sale_filter):
+    def _set_output_summary(self, category_url, sale_filter, max_price=None):
         # Sets just the identity of the scan (URL + filter) and clears the
         # completion line -- used when a scan is about to start/resume, before
         # its outcome is known. _refresh_output_summary fills the completion
@@ -291,7 +319,10 @@ class TicketApp:
             self.output_filter_label.config(text="")
         else:
             self.output_url_label.config(text=category_url)
-            self.output_filter_label.config(text=f"Filter: {sale_filter}")
+            filter_text = f"Filter: {sale_filter}"
+            if max_price is not None:
+                filter_text += f" | Max price: ${max_price:g}"
+            self.output_filter_label.config(text=filter_text)
 
         self.output_status_label.config(text="")
 
@@ -310,7 +341,9 @@ class TicketApp:
             return
 
         self._set_output_summary(
-            progress.get("category_url", ""), progress.get("sale_filter", "")
+            progress.get("category_url", ""),
+            progress.get("sale_filter", ""),
+            progress.get("max_price"),
         )
 
         if completed:
@@ -435,10 +468,11 @@ class TicketApp:
 
         category_url = normalise_url(self.url_entry.get().strip())
         sale_filter = self.sale_filter.get()
+        max_price, _ = parse_max_price(self.max_price_entry.get())
 
         progress = load_progress()
         is_resumable = (
-            progress_matches(progress, category_url, sale_filter)
+            progress_matches(progress, category_url, sale_filter, max_price)
             and not is_completed(progress)
         )
 
@@ -448,10 +482,11 @@ class TicketApp:
     def restart_scrape(self):
         category_url = normalise_url(self.url_entry.get().strip())
         sale_filter = self.sale_filter.get()
+        max_price, _ = parse_max_price(self.max_price_entry.get())
 
-        start_new_run(category_url, sale_filter)
+        start_new_run(category_url, sale_filter, max_price)
         self.reset_display()
-        self._set_output_summary(category_url, sale_filter)
+        self._set_output_summary(category_url, sale_filter, max_price)
 
         self.start_scrape()
 
@@ -490,9 +525,16 @@ class TicketApp:
         category_url = self.url_entry.get().strip()
         category_url = normalise_url(category_url)
 
-        progress = load_progress()
+        max_price, max_price_error = parse_max_price(self.max_price_entry.get())
+        if max_price_error:
+            self.set_status(f"Start failed — {max_price_error}")
+            self.start_button.config(state="normal")
+            return
 
-        if progress_matches(progress, category_url, sale_filter) and not is_completed(progress):
+        progress = load_progress()
+        matches_saved_run = progress_matches(progress, category_url, sale_filter, max_price)
+
+        if matches_saved_run and not is_completed(progress):
             self.set_status("Resuming previous run...")
 
             self.product_value.config(
@@ -508,9 +550,9 @@ class TicketApp:
             )
 
             self._refresh_output_buttons()
-            self._set_output_summary(category_url, sale_filter)
+            self._set_output_summary(category_url, sale_filter, max_price)
 
-        if progress_matches(progress, category_url, sale_filter) and is_completed(progress):
+        if matches_saved_run and is_completed(progress):
             run_again = messagebox.askyesno(
                 "Category already completed",
                 "This category has already been completed.\n\n"
@@ -522,9 +564,9 @@ class TicketApp:
                 self.start_button.config(state="normal")
                 return
 
-            start_new_run(category_url, sale_filter)
+            start_new_run(category_url, sale_filter, max_price)
             self._refresh_output_buttons()
-            self._set_output_summary(category_url, sale_filter)
+            self._set_output_summary(category_url, sale_filter, max_price)
         self._safe_after(
             0,
             self.start_button.config,
@@ -542,13 +584,13 @@ class TicketApp:
         )
         self.scrape_thread = threading.Thread(
             target=self.run_scraper,
-            args=(category_url, sale_filter),
+            args=(category_url, sale_filter, max_price),
             daemon=True
         )
 
         self.scrape_thread.start()
 
-    def run_scraper(self, category_url, sale_filter):
+    def run_scraper(self, category_url, sale_filter, max_price=None):
         self._safe_after(
         0,
         self.start_button.config,
@@ -585,7 +627,7 @@ class TicketApp:
                     return
 
                 progress = load_progress()
-                if not progress_matches(progress, category_url, sale_filter):
+                if not progress_matches(progress, category_url, sale_filter, max_price):
                     # Reset synchronously, right here, before scheduling any UI
                     # refresh -- start_new_run truncates every output file plus
                     # progress.json in one call on this thread, so by the time
@@ -593,16 +635,19 @@ class TicketApp:
                     # (whenever that turns out to be) there's no window where
                     # they could read a stale, not-yet-truncated file left over
                     # from the previous category/filter.
-                    start_new_run(category_url, sale_filter)
+                    start_new_run(category_url, sale_filter, max_price)
                     self._safe_after(0, self.reset_display)
-                    self._safe_after(0, self._set_output_summary, category_url, sale_filter)
+                    self._safe_after(
+                        0, self._set_output_summary, category_url, sale_filter, max_price
+                    )
 
                 scrape_category(
                     page,
                     category_url,
                     sale_filter,
                     on_progress=self.handle_progress,
-                    stop_event=self.stop_event
+                    stop_event=self.stop_event,
+                    max_price=max_price
                 )
 
                 if self.stop_event.is_set():

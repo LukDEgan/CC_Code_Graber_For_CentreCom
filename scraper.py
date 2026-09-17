@@ -88,6 +88,7 @@ def get_retail_product_urls(
     sale_filter="All items",
     on_progress=None,
     stop_event=None,
+    max_price=None,
 ):
     product_urls = []
 
@@ -138,6 +139,15 @@ def get_retail_product_urls(
             if sale_filter == "Not on sale" and sale_status == "sale":
                 skipped_products += 1
                 continue
+
+            if max_price is not None:
+                price = get_listing_price(product)
+                # Expensive items held behind the counter don't need
+                # ticketing -- but if the price can't be read, don't
+                # silently drop the product, let it through as before.
+                if price is not None and price > max_price:
+                    skipped_products += 1
+                    continue
 
             if is_deal_page:
                 href = product.locator("a").first.get_attribute("href")
@@ -238,6 +248,27 @@ def check_product(
 
             print(f"Retrying {product_url}...")
 
+def parse_price(text):
+    # "$1,093" / "$957.5" -> 1093.0 / 957.5
+    cleaned = text.strip().lstrip("$").replace(",", "")
+
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+def get_listing_price(product):
+    # .saleprice holds the current/displayed price whether or not the item is
+    # actually discounted (get_sale_status treats it alone as ambiguous) --
+    # .regprice is a defensive fallback for any listing that doesn't use it.
+    price_locator = product.locator(".saleprice")
+    if price_locator.count() == 0:
+        price_locator = product.locator(".regprice")
+    if price_locator.count() == 0:
+        return None
+
+    return parse_price(price_locator.first.inner_text())
+
 def get_sale_status(product):
     has_was_price = product.locator(".wasprice").count() > 0
     has_reg_price = product.locator(".regprice").count() > 0
@@ -261,6 +292,7 @@ def scrape_category(
     sale_filter="All items",
     on_progress=None,
     stop_event=None,
+    max_price=None,
 ):
     # Reset for a genuinely new category/filter (or bail out on an
     # already-completed one) before pagination runs, not after -- otherwise
@@ -268,15 +300,15 @@ def scrape_category(
     # entire time it takes to page through the new category.
     progress = load_progress()
 
-    if not progress_matches(progress, category_url, sale_filter):
-        start_new_run(category_url, sale_filter)
+    if not progress_matches(progress, category_url, sale_filter, max_price):
+        start_new_run(category_url, sale_filter, max_price)
         progress = load_progress()
 
     elif is_completed(progress):
         return
 
     product_urls, skipped_products = get_retail_product_urls(
-        page, category_url, sale_filter, on_progress, stop_event
+        page, category_url, sale_filter, on_progress, stop_event, max_price=max_price
     )
 
     if stop_event and stop_event.is_set():
@@ -303,7 +335,7 @@ def scrape_category(
     # have been successfully saved. If not, the run is no longer trustworthy.
     if get_cc_file_count() != cc_count:
         print("Progress mismatch detected. Restarting category from the beginning.")
-        start_new_run(category_url, sale_filter)
+        start_new_run(category_url, sale_filter, max_price)
         next_index = 0
         cc_count = 0
         fail_count = 0
@@ -312,7 +344,7 @@ def scrape_category(
     # restart rather than silently skipping work.
     if next_index < 0 or next_index > len(product_urls):
         print("Saved product index is invalid. Restarting category from the beginning.")
-        start_new_run(category_url, sale_filter)
+        start_new_run(category_url, sale_filter, max_price)
         next_index = 0
         cc_count = 0
         fail_count = 0
@@ -327,13 +359,14 @@ def scrape_category(
         # Catch external edits or a previous partial write before continuing.
         if get_cc_file_count() != cc_count:
             print("Progress mismatch detected during run. Restarting category.")
-            start_new_run(category_url, sale_filter)
+            start_new_run(category_url, sale_filter, max_price)
             return scrape_category(
                 page,
                 category_url,
                 sale_filter=sale_filter,
                 on_progress=on_progress,
-                stop_event=stop_event
+                stop_event=stop_event,
+                max_price=max_price,
             )
 
         product_data = product_urls[index]
@@ -377,6 +410,7 @@ def scrape_category(
             cc_count=cc_count,
             fail_count=fail_count,
             completed=False,
+            max_price=max_price,
         )
 
     save_progress(
@@ -386,6 +420,7 @@ def scrape_category(
         cc_count=cc_count,
         fail_count=fail_count,
         completed=True,
+        max_price=max_price,
     )
     report_progress(
         on_progress,
